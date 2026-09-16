@@ -82,7 +82,17 @@ export async function runClient(command: ClientCommand, options: RunClientOption
 		const agent = match.agent;
 		const completedText = new Map<string, string>();
 		let deliveryTail = Promise.resolve();
+		let pendingOperationId: string | undefined;
+		let resolveOperationReplication!: () => void;
+		const operationReplicated = new Promise<void>((resolve) => {
+			resolveOperationReplication = resolve;
+		});
+		const isOperationReplicated = (snapshot: NonNullable<typeof match.transcript.state.value>["snapshot"]): boolean =>
+			pendingOperationId !== undefined &&
+			(snapshot?.lastResult?.operationId === pendingOperationId ||
+				(snapshot?.operation?.id === pendingOperationId && snapshot.operation?.deferred !== undefined));
 		const unsubscribe = match.transcript.state.subscribe((value, _context, delivery) => {
+			if (pendingOperationId !== undefined && isOperationReplicated(value.snapshot)) resolveOperationReplication();
 			if (delivery.kind !== "update" || value.event === null) return;
 			const event = value.event;
 			deliveryTail = deliveryTail.then(async () => {
@@ -99,6 +109,13 @@ export async function runClient(command: ClientCommand, options: RunClientOption
 		let response: AgentOperationResponse;
 		try {
 			response = await agent.prompt({ message: command.prompt, images: null }, BACKGROUND_CONTEXT);
+			if (response.accepted) {
+				// The controller response and transcript updates use separate streams. Keep
+				// the subscription alive until the matching terminal state catches up.
+				pendingOperationId = response.operationId;
+				if (isOperationReplicated(match.transcript.state.value?.snapshot)) resolveOperationReplication();
+				await operationReplicated;
+			}
 		} finally {
 			unsubscribe();
 			await deliveryTail;
