@@ -219,7 +219,8 @@ export interface AgentSessionConfig {
 	customTools?: ToolDefinition[];
 	/** Canonical model/auth runtime used by coding-agent internals. */
 	modelRuntime: ModelRuntime;
-	cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onIdle" | "subscribe">;
+	/** Cancelled whenever the session's context changes so a stale prompt cache is not kept warm. */
+	cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onAgentSettled" | "subscribe">;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
@@ -375,7 +376,7 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
-	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onIdle" | "subscribe">;
+	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onAgentSettled" | "subscribe">;
 	private _unsubscribeCacheWarmer?: () => void;
 
 	// Tool registry for extension getTools/setTools
@@ -651,7 +652,7 @@ export class AgentSession {
 	}
 
 	private async _emitAgentSettled(): Promise<void> {
-		this._cacheWarmer?.onIdle();
+		this._cacheWarmer?.onAgentSettled();
 		this._isAgentRunActive = false;
 		try {
 			await this._extensionRunner.emit({ type: "agent_settled" });
@@ -919,9 +920,9 @@ export class AgentSession {
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
 		this._disconnectFromAgent();
+		this._eventListeners = [];
 		this._unsubscribeCacheWarmer?.();
 		this._unsubscribeCacheWarmer = undefined;
-		this._eventListeners = [];
 		this._cacheWarmer?.cancel();
 		cleanupSessionResources(this.sessionId);
 	}
@@ -3128,6 +3129,13 @@ export class AgentSession {
 			// Save to session
 			this.sessionManager.appendMessage(bashMessage);
 		}
+	}
+
+	/**
+	 * Stop keeping the current prompt cache warm. The next request restarts warming if enabled.
+	 */
+	stopCacheWarming(): void {
+		this._cacheWarmer?.cancel();
 	}
 
 	/**

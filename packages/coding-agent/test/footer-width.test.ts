@@ -5,6 +5,7 @@ import type { CacheWarmingState } from "../src/core/cache-warmer.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
 import {
 	FooterComponent,
+	formatCacheWarmingIndicator,
 	formatCacheWarmingStatus,
 	formatCwdForFooter,
 } from "../src/modes/interactive/components/footer.ts";
@@ -85,10 +86,10 @@ function createSession(options: {
 			getCwd: () => "/tmp/project",
 		},
 		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
+		cacheWarmingState: options.cacheWarmingState ?? { status: "inactive" },
 		modelRuntime: {
 			isUsingSubscription: () => options.usingSubscription ?? false,
 		},
-		cacheWarmingState: options.cacheWarmingState ?? { status: "inactive" },
 	};
 
 	return session as unknown as AgentSession;
@@ -121,14 +122,51 @@ describe("formatCwdForFooter", () => {
 
 describe("formatCacheWarmingStatus", () => {
 	it("describes scheduled and active refreshes", () => {
-		expect(formatCacheWarmingStatus({ status: "scheduled", mode: "idle", nextWarmAt: 222_000 }, 0)).toBe(
-			"Next refresh in 3m 42s",
-		);
-		expect(formatCacheWarmingStatus({ status: "scheduled", mode: "streaming", nextWarmAt: 60_000 }, 0)).toBe(
-			"Next refresh in 1m (while active)",
-		);
+		expect(
+			formatCacheWarmingStatus({ status: "scheduled", mode: "idle", scheduledAt: 0, nextWarmAt: 222_000 }, 0),
+		).toBe("Next refresh in 3m 42s");
+		expect(
+			formatCacheWarmingStatus({ status: "scheduled", mode: "streaming", scheduledAt: 0, nextWarmAt: 60_000 }, 0),
+		).toBe("Next refresh in 1m");
 		expect(formatCacheWarmingStatus({ status: "warming", mode: "idle", startedAt: 0 }, 0)).toBe("Refreshing now");
 		expect(formatCacheWarmingStatus({ status: "inactive" }, 0)).toBe("No refresh scheduled");
+	});
+});
+
+describe("formatCacheWarmingIndicator", () => {
+	it("fills a quarter at a time as the refresh approaches", () => {
+		const scheduled = { status: "scheduled", mode: "idle", scheduledAt: 0, nextWarmAt: 400 } as const;
+		expect([0, 100, 200, 300, 399, 450].map((now) => formatCacheWarmingIndicator(scheduled, now))).toEqual([
+			"○",
+			"◔",
+			"◑",
+			"◕",
+			"◕",
+			"◕",
+		]);
+		expect(formatCacheWarmingIndicator({ status: "inactive" }, 0)).toBeUndefined();
+	});
+
+	it("spins during a refresh and for two seconds afterwards", () => {
+		const warming = { status: "warming", mode: "idle", startedAt: 1000 } as const;
+		expect([1000, 1150, 1300, 1450, 1600].map((now) => formatCacheWarmingIndicator(warming, now))).toEqual([
+			"◐",
+			"◓",
+			"◑",
+			"◒",
+			"◐",
+		]);
+
+		const afterWarm = {
+			status: "scheduled",
+			mode: "idle",
+			scheduledAt: 1200,
+			nextWarmAt: 241_200,
+			warmedAt: 1000,
+		} as const;
+		expect(formatCacheWarmingIndicator(afterWarm, 1300)).toBe("◑");
+		expect(formatCacheWarmingIndicator(afterWarm, 2999)).toBe("◓");
+		expect(formatCacheWarmingIndicator(afterWarm, 3000)).toBe("○");
 	});
 });
 
@@ -227,51 +265,19 @@ describe("FooterComponent width handling", () => {
 		expect(statsLine).toContain("CH25.0%");
 	});
 
-	it("shows cache warming immediately before context usage", () => {
-		const session = createSession({
-			sessionName: "",
-			usage: {
-				input: 100,
-				output: 10,
-				cacheRead: 50,
-				cacheWrite: 50,
-				cost: { total: 0.001 },
-			},
-			cacheWarmingState: { status: "scheduled", mode: "idle", nextWarmAt: Date.now() + 60_000 },
-		});
-		const footer = new FooterComponent(session, createFooterData(1));
-
-		const stats = stripAnsi(footer.render(120)[1]);
-		expect(stats).toContain("CH25.0%");
-		expect(stats).toContain("♨  12.3%/200k");
-	});
-
-	it("shows cache warming before cache statistics exist", () => {
-		const session = createSession({
-			sessionName: "",
-			cacheWarmingState: { status: "scheduled", mode: "idle", nextWarmAt: Date.now() + 60_000 },
-		});
-		const footer = new FooterComponent(session, createFooterData(1));
-
-		expect(stripAnsi(footer.render(120)[1])).toContain("♨  12.3%/200k");
-	});
-
-	it("pulses the cache warming indicator during a refresh", () => {
+	it("shows the cache warming indicator before context usage", () => {
 		vi.useFakeTimers();
 		try {
+			vi.setSystemTime(0);
 			const session = createSession({
 				sessionName: "",
-				cacheWarmingState: { status: "warming", mode: "idle", startedAt: 0 },
+				cacheWarmingState: { status: "scheduled", mode: "idle", scheduledAt: 0, nextWarmAt: 60_000 },
 			});
 			const footer = new FooterComponent(session, createFooterData(1));
-			vi.setSystemTime(0);
-			const highlighted = footer.render(120)[1];
-			vi.setSystemTime(500);
-			const dimmed = footer.render(120)[1];
 
-			expect(stripAnsi(highlighted)).toContain("♨");
-			expect(stripAnsi(dimmed)).toContain("♨");
-			expect(highlighted).not.toBe(dimmed);
+			expect(stripAnsi(footer.render(120)[1])).toContain("○ 12.3%/200k");
+			vi.setSystemTime(45_000);
+			expect(stripAnsi(footer.render(120)[1])).toContain("◕ 12.3%/200k");
 		} finally {
 			vi.useRealTimers();
 		}

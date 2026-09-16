@@ -41,7 +41,7 @@ import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
-import { ModelConfig, type ResolvedCacheWarmingSettings } from "./model-config.ts";
+import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
 	type AuthStatus,
@@ -388,17 +388,6 @@ export class ModelRuntime implements Models {
 
 	getProvider(providerId: string): Provider | undefined {
 		return this.models.getProvider(providerId);
-	}
-
-	getCacheWarmingSettings(providerId: string): ResolvedCacheWarmingSettings | undefined {
-		const settings =
-			this.config.getProvider(providerId)?.cacheWarming ?? this.extensionProviders.get(providerId)?.cacheWarming;
-		if (!settings || settings.mode === "off") return undefined;
-		return {
-			mode: settings.mode,
-			refreshAfterMs: settings.refreshAfterSeconds === undefined ? undefined : settings.refreshAfterSeconds * 1000,
-			maxDurationMs: (settings.maxDurationSeconds ?? 3600) * 1000,
-		};
 	}
 
 	getModels(providerId?: string): readonly Model<Api>[] {

@@ -136,6 +136,10 @@ const ModelCostSchema = Type.Object({
 	...ModelCostRatesSchema,
 	tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
 });
+const ModelPromptCacheSchema = Type.Object({
+	short: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+	long: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+});
 
 const AnthropicMessagesCompatSchema = Type.Object({
 	supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
@@ -174,6 +178,7 @@ const ModelDefinitionSchema = Type.Object({
 	thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
 	input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
 	cost: Type.Optional(ModelCostSchema),
+	promptCache: Type.Optional(ModelPromptCacheSchema),
 	contextWindow: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
 	samplingParams: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
@@ -195,17 +200,12 @@ const ModelOverrideSchema = Type.Object({
 			tiers: Type.Optional(Type.Array(ModelCostTierSchema)),
 		}),
 	),
+	promptCache: Type.Optional(ModelPromptCacheSchema),
 	contextWindow: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
 	samplingParams: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
-});
-
-const CacheWarmingSchema = Type.Object({
-	mode: Type.Union([Type.Literal("off"), Type.Literal("streaming"), Type.Literal("idle")]),
-	refreshAfterSeconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
-	maxDurationSeconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
 });
 
 const ProviderConfigSchema = Type.Object({
@@ -217,7 +217,6 @@ const ProviderConfigSchema = Type.Object({
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
 	authHeader: Type.Optional(Type.Boolean()),
-	cacheWarming: Type.Optional(CacheWarmingSchema),
 	models: Type.Optional(Type.Array(ModelDefinitionSchema)),
 	modelOverrides: Type.Optional(Type.Record(Type.String(), ModelOverrideSchema)),
 });
@@ -230,18 +229,6 @@ const validateModelsConfig = Compile(ModelsConfigSchema);
 export type ModelsJsonModel = Static<typeof ModelDefinitionSchema>;
 export type ModelsJsonModelOverride = Static<typeof ModelOverrideSchema>;
 export type ModelsJsonProvider = Static<typeof ProviderConfigSchema>;
-export type CacheWarmingMode = Static<typeof CacheWarmingSchema>["mode"];
-export interface CacheWarmingConfig {
-	mode: CacheWarmingMode;
-	refreshAfterSeconds?: number;
-	maxDurationSeconds?: number;
-}
-export interface ResolvedCacheWarmingSettings {
-	mode: Exclude<CacheWarmingMode, "off">;
-	/** Undefined uses a provider-specific cadence derived from the cache plan's TTL. */
-	refreshAfterMs?: number;
-	maxDurationMs: number;
-}
 type ModelsJson = Static<typeof ModelsConfigSchema>;
 
 function formatValidationPath(error: TLocalizedValidationError): string {

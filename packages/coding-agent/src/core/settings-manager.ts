@@ -73,6 +73,16 @@ export interface ThinkingBudgetsSettings {
 
 export type MermaidRenderingMode = "off" | "final" | "streaming";
 
+/** "streaming" warms only while the agent runs; "idle" keeps warming after it settles. */
+export type CacheWarmingMode = "off" | "streaming" | "idle";
+
+export interface CacheWarmingSettings {
+	mode?: CacheWarmingMode; // default: "off"
+	maxMinutes?: number; // default: 60; stop warming this long after the last request
+}
+
+export const DEFAULT_CACHE_WARMING_MAX_MINUTES = 60;
+
 export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
 	mermaid?: MermaidRenderingMode; // default: "streaming"
@@ -150,6 +160,7 @@ export interface Settings {
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
+	cacheWarming?: CacheWarmingSettings; // Prompt cache warming; global only because each refresh costs money
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
 	tuiMode?: TuiMode; // default: "regular"
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
@@ -943,6 +954,36 @@ export class SettingsManager {
 		}
 		this.globalSettings.httpIdleTimeoutMs = Math.floor(timeoutMs);
 		this.markModified("httpIdleTimeoutMs");
+		this.save();
+	}
+
+	/** Read from global settings only because warming costs money. */
+	getCacheWarming(): Required<CacheWarmingSettings> {
+		const mode = this.globalSettings.cacheWarming?.mode;
+		const maxMinutes = this.globalSettings.cacheWarming?.maxMinutes;
+		return {
+			mode: mode === "streaming" || mode === "idle" ? mode : "off",
+			maxMinutes:
+				typeof maxMinutes === "number" && Number.isFinite(maxMinutes) && maxMinutes > 0
+					? maxMinutes
+					: DEFAULT_CACHE_WARMING_MAX_MINUTES,
+		};
+	}
+
+	setCacheWarmingMode(mode: CacheWarmingMode): void {
+		this.globalSettings.cacheWarming ??= {};
+		this.globalSettings.cacheWarming.mode = mode;
+		this.markModified("cacheWarming", "mode");
+		this.save();
+	}
+
+	setCacheWarmingMaxMinutes(maxMinutes: number): void {
+		if (!Number.isFinite(maxMinutes) || maxMinutes <= 0) {
+			throw new Error(`Invalid cacheWarming.maxMinutes setting: ${String(maxMinutes)}`);
+		}
+		this.globalSettings.cacheWarming ??= {};
+		this.globalSettings.cacheWarming.maxMinutes = maxMinutes;
+		this.markModified("cacheWarming", "maxMinutes");
 		this.save();
 	}
 

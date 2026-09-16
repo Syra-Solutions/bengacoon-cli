@@ -393,6 +393,44 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("cacheWarming", () => {
+		it("defaults to off with a 60 minute window and ignores project settings", () => {
+			const off = { mode: "off", maxMinutes: 60 };
+			expect(SettingsManager.create(projectDir, agentDir).getCacheWarming()).toEqual(off);
+
+			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ cacheWarming: { mode: "idle" } }));
+			expect(SettingsManager.create(projectDir, agentDir).getCacheWarming()).toEqual(off);
+
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ cacheWarming: { mode: "streaming", maxMinutes: 30 } }),
+			);
+			expect(SettingsManager.create(projectDir, agentDir).getCacheWarming()).toEqual({
+				mode: "streaming",
+				maxMinutes: 30,
+			});
+
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ cacheWarming: { mode: "bogus", maxMinutes: 0 } }),
+			);
+			expect(SettingsManager.create(projectDir, agentDir).getCacheWarming()).toEqual(off);
+		});
+
+		it("persists each key to global settings and rejects a non-positive window", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setCacheWarmingMode("idle");
+			manager.setCacheWarmingMaxMinutes(120);
+			await manager.flush();
+
+			expect(SettingsManager.create(projectDir, agentDir).getCacheWarming()).toEqual({
+				mode: "idle",
+				maxMinutes: 120,
+			});
+			expect(() => manager.setCacheWarmingMaxMinutes(0)).toThrow("Invalid cacheWarming.maxMinutes setting");
+		});
+	});
+
 	describe("externalEditor", () => {
 		const originalVisual = process.env.VISUAL;
 		const originalEditor = process.env.EDITOR;

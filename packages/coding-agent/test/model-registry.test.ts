@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ModelsJsonProvider } from "../src/core/model-config.ts";
 import { clearApiKeyCache, type ModelRegistry, type ProviderConfigInput } from "../src/core/model-registry.ts";
-import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
+import { createModelRegistry } from "./model-runtime-test-utils.ts";
 
 describe("ModelRegistry", () => {
 	let tempDir: string;
@@ -92,24 +92,6 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("baseUrl override (no custom models)", () => {
-		test("loads provider cache warming without replacing built-in models", async () => {
-			writeRawModelsJson({
-				anthropic: {
-					cacheWarming: { mode: "idle", refreshAfterSeconds: 2, maxDurationSeconds: 10 },
-				},
-			});
-
-			const registry = await createModelRegistry(authStorage, modelsJsonPath);
-
-			expect(registry.getError()).toBeUndefined();
-			expect(getModelsForProvider(registry, "anthropic").length).toBeGreaterThan(1);
-			expect(getModelRuntime(registry).getCacheWarmingSettings("anthropic")).toEqual({
-				mode: "idle",
-				refreshAfterMs: 2000,
-				maxDurationMs: 10_000,
-			});
-		});
-
 		test("overriding baseUrl keeps all built-in models", async () => {
 			writeRawModelsJson({
 				anthropic: overrideConfig("https://my-proxy.example.com/v1"),
@@ -805,6 +787,34 @@ describe("ModelRegistry", () => {
 			expect(opus?.samplingParams).toBeUndefined();
 		});
 
+		test("custom model and model override carry prompt cache lifetimes", async () => {
+			writeRawModelsJson({
+				openrouter: {
+					baseUrl: "https://my-proxy.example.com/v1",
+					api: "openai-completions",
+					models: [{ id: "custom/cached-model", promptCache: { short: 120 } }],
+					modelOverrides: {
+						"anthropic/claude-sonnet-4": { promptCache: { short: 300 } },
+					},
+				},
+				anthropic: {
+					modelOverrides: {
+						"claude-sonnet-4-6": { promptCache: { long: 1800 } },
+					},
+				},
+			});
+
+			const registry = await createModelRegistry(authStorage, modelsJsonPath);
+			const openrouter = getModelsForProvider(registry, "openrouter");
+
+			expect(registry.getError()).toBeUndefined();
+			expect(openrouter.find((m) => m.id === "custom/cached-model")?.promptCache).toEqual({ short: 120 });
+			expect(openrouter.find((m) => m.id === "anthropic/claude-sonnet-4")?.promptCache).toEqual({ short: 300 });
+			expect(openrouter.find((m) => m.id === "anthropic/claude-opus-4")?.promptCache).toBeUndefined();
+			// Overrides merge per tier with the built-in catalog.
+			expect(registry.find("anthropic", "claude-sonnet-4-6")?.promptCache).toEqual({ short: 300, long: 1800 });
+		});
+
 		test("model override with compat.openRouterRouting", async () => {
 			writeRawModelsJson({
 				openrouter: {
@@ -1046,21 +1056,6 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("dynamic provider lifecycle", () => {
-		test("extension providers can configure cache warming", async () => {
-			const registry = await createModelRegistry(authStorage, modelsJsonPath);
-
-			registry.registerProvider("custom-provider", {
-				...providerConfig("https://custom.test/v1", [{ id: "custom-model" }], "custom-api"),
-				cacheWarming: { mode: "idle", maxDurationSeconds: 30 },
-			});
-
-			expect(getModelRuntime(registry).getCacheWarmingSettings("custom-provider")).toEqual({
-				mode: "idle",
-				refreshAfterMs: undefined,
-				maxDurationMs: 30_000,
-			});
-		});
-
 		test("getProviderDisplayName resolves registered, OAuth, built-in, and fallback names", async () => {
 			const registry = await createModelRegistry(authStorage, modelsJsonPath);
 

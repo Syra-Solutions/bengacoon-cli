@@ -23,7 +23,6 @@ See these complete provider examples:
 - [Unregister Provider](#unregister-provider)
 - [OAuth Support](#oauth-support)
 - [Custom Streaming API](#custom-streaming-api)
-- [Cache Warming](#cache-warming)
 - [Context Overflow Errors](#context-overflow-errors)
 - [Testing Your Implementation](#testing-your-implementation)
 - [Config Reference](#config-reference)
@@ -571,50 +570,6 @@ output.usage.totalTokens = output.usage.input + output.usage.output +
 calculateCost(model, output.usage);
 ```
 
-## Cache Warming
-
-Cache warming is not tied to a specific API or provider. A custom `streamSimple` implementation opts in by publishing a provider-owned `CacheWarmPlan` through `options.onCacheWarmPlan` after the original request has been accepted:
-
-```typescript
-const finalPayload = await applyPayloadTransform(payload, options?.onPayload, model);
-const response = await fetch(url, { method: "POST", body: JSON.stringify(finalPayload) });
-await options?.onResponse?.(
-  { status: response.status, headers: Object.fromEntries(response.headers) },
-  model,
-);
-
-if (options?.cacheRetention !== "none") {
-  const warmPayload = structuredClone(finalPayload);
-  options?.onCacheWarmPlan?.({
-    ttlMs: 300_000,
-    warm: async (signal) => {
-      const warmResponse = await sendCacheRefresh(warmPayload, signal);
-      const usage = readUsage(warmResponse);
-      calculateCost(model, usage);
-      return { provider: model.provider, model: model.id, usage };
-    },
-  });
-}
-```
-
-The plan must retain the exact provider-native payload and routing data needed to hit the same cache entry. Its `warm` function should make the smallest request the API permits, avoid invoking `onCacheWarmPlan` recursively, honor the supplied abort signal, and return complete usage and cost. Provider errors are ignored because warming is best-effort.
-
-Enable scheduling in the same provider registration:
-
-```typescript
-pi.registerProvider("my-provider", {
-  api: "my-custom-api",
-  streamSimple: streamMyProvider,
-  cacheWarming: {
-    mode: "streaming",
-    maxDurationSeconds: 3600,
-  },
-  // ...
-});
-```
-
-If `refreshAfterSeconds` is omitted, Pi derives it from `CacheWarmPlan.ttlMs`. This allows adapters with different cache lifetimes to use the same scheduler.
-
 ### Context Overflow Errors
 
 When a request exceeds the model's context window, pi can recover automatically by compacting the conversation and retrying. This recovery only kicks in if pi recognizes the failure as an overflow.
@@ -732,13 +687,6 @@ interface ProviderConfig {
   /** If true, adds Authorization: Bearer header with the resolved API key. */
   authHeader?: boolean;
 
-  /** Prompt cache warming policy for adapters that publish CacheWarmPlan. */
-  cacheWarming?: {
-    mode: "off" | "streaming" | "idle";
-    refreshAfterSeconds?: number;
-    maxDurationSeconds?: number;
-  };
-
   /** Models to register. If provided, replaces all existing models for this provider. */
   models?: ProviderModelConfig[];
 
@@ -784,6 +732,9 @@ interface ProviderModelConfig {
     cacheRead: number;
     cacheWrite: number;
   };
+
+  /** Best-effort prompt cache lifetime in seconds per retention tier. Unset disables cache warming. */
+  promptCache?: { short?: number; long?: number };
 
   /** Maximum context window size in tokens. */
   contextWindow: number;

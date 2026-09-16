@@ -11,8 +11,14 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
+import {
+	CACHE_WARMING_MAX_MINUTES_CHOICES,
+	CACHE_WARMING_MODES,
+	formatCacheWarmingMaxMinutes,
+} from "../../../core/cache-warmer.ts";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import type {
+	CacheWarmingMode,
 	DefaultProjectTrust,
 	FullscreenExitOutput,
 	MermaidRenderingMode,
@@ -60,6 +66,8 @@ export interface SettingsConfig {
 	followUpMode: "all" | "one-at-a-time";
 	transport: Transport;
 	httpIdleTimeoutMs: number;
+	cacheWarmingMode: CacheWarmingMode;
+	cacheWarmingMaxMinutes: number;
 	thinkingLevel: ThinkingLevel;
 	availableThinkingLevels: ThinkingLevel[];
 	modelThinkingLevels: Record<string, ThinkingLevel>;
@@ -99,6 +107,8 @@ export interface SettingsCallbacks {
 	onFollowUpModeChange: (mode: "all" | "one-at-a-time") => void;
 	onTransportChange: (transport: Transport) => void;
 	onHttpIdleTimeoutMsChange: (timeoutMs: number) => void;
+	onCacheWarmingModeChange: (mode: CacheWarmingMode) => void;
+	onCacheWarmingMaxMinutesChange: (minutes: number) => void;
 	onModelThinkingLevelChange: (provider: string, modelId: string, level: ThinkingLevel) => void;
 	onModelThinkingLevelRemove: (provider: string, modelId: string) => void;
 	onThemeChange: (theme: string) => void;
@@ -496,6 +506,21 @@ export class SettingsSelectorComponent extends Container {
 				values: HTTP_IDLE_TIMEOUT_CHOICES.map((choice) => choice.label),
 			},
 			{
+				id: "cache-warming-mode",
+				label: "Cache warming",
+				description:
+					"Refresh the prompt cache while the agent runs (streaming) or also afterwards (idle). Costs cache reads.",
+				currentValue: config.cacheWarmingMode,
+				values: [...CACHE_WARMING_MODES],
+			},
+			{
+				id: "cache-warming-max-minutes",
+				label: "Cache warming duration",
+				description: "Stop warming this long after the last request",
+				currentValue: formatCacheWarmingMaxMinutes(config.cacheWarmingMaxMinutes),
+				values: CACHE_WARMING_MAX_MINUTES_CHOICES.map((choice) => choice.label),
+			},
+			{
 				id: "hide-thinking",
 				label: "Hide thinking",
 				description: "Hide thinking blocks in assistant responses",
@@ -860,6 +885,16 @@ export class SettingsSelectorComponent extends Container {
 						const choice = HTTP_IDLE_TIMEOUT_CHOICES.find((item) => item.label === newValue);
 						if (choice) {
 							callbacks.onHttpIdleTimeoutMsChange(choice.timeoutMs);
+						}
+						break;
+					}
+					case "cache-warming-mode":
+						callbacks.onCacheWarmingModeChange(newValue as CacheWarmingMode);
+						break;
+					case "cache-warming-max-minutes": {
+						const choice = CACHE_WARMING_MAX_MINUTES_CHOICES.find((item) => item.label === newValue);
+						if (choice) {
+							callbacks.onCacheWarmingMaxMinutesChange(choice.minutes);
 						}
 						break;
 					}

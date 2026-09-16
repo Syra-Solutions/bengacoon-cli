@@ -20,13 +20,7 @@ import {
 	type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
-import type {
-	CacheWarmingConfig,
-	ModelConfig,
-	ModelsJsonModel,
-	ModelsJsonModelOverride,
-	ModelsJsonProvider,
-} from "./model-config.ts";
+import type { ModelConfig, ModelsJsonModel, ModelsJsonModelOverride, ModelsJsonProvider } from "./model-config.ts";
 import {
 	clearConfigValueCache,
 	getConfigValueEnvVarNames,
@@ -61,7 +55,6 @@ export interface ProviderConfigInput {
 	) => AssistantMessageEventStream;
 	headers?: Record<string, string>;
 	authHeader?: boolean;
-	cacheWarming?: CacheWarmingConfig;
 	oauth?: ExtensionOAuthConfig;
 	models?: Array<{
 		id: string;
@@ -72,6 +65,7 @@ export interface ProviderConfigInput {
 		thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
 		input: ("text" | "image")[];
 		cost: Model<Api>["cost"];
+		promptCache?: Model<Api>["promptCache"];
 		contextWindow: number;
 		maxTokens: number;
 		samplingParams?: Record<string, unknown>;
@@ -129,6 +123,7 @@ function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride
 					tiers: override.cost.tiers ?? model.cost.tiers,
 				}
 			: model.cost,
+		promptCache: override.promptCache ? { ...model.promptCache, ...override.promptCache } : model.promptCache,
 		contextWindow: override.contextWindow ?? model.contextWindow,
 		maxTokens: override.maxTokens ?? model.maxTokens,
 		samplingParams: override.samplingParams
@@ -168,6 +163,7 @@ function modelFromJson(
 		thinkingLevelMap: definition.thinkingLevelMap,
 		input: (definition.input ?? ["text"]) as ("text" | "image")[],
 		cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		promptCache: definition.promptCache,
 		contextWindow: definition.contextWindow ?? 128000,
 		maxTokens: definition.maxTokens ?? 16384,
 		samplingParams: definition.samplingParams,
@@ -203,11 +199,10 @@ function applyModelsJson(
 		!hasOverrides &&
 		!config.apiKey &&
 		!config.oauth &&
-		!config.cacheWarming &&
 		config.authHeader === undefined
 	) {
 		throw new Error(
-			`Provider ${providerId}: must specify "baseUrl", "headers", "compat", "cacheWarming", "modelOverrides", or "models".`,
+			`Provider ${providerId}: must specify "baseUrl", "headers", "compat", "modelOverrides", or "models".`,
 		);
 	}
 

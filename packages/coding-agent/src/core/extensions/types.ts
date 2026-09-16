@@ -1536,15 +1536,6 @@ export interface ProviderConfig {
 	headers?: Record<string, string>;
 	/** If true, adds Authorization: Bearer header with the resolved API key. */
 	authHeader?: boolean;
-	/**
-	 * Prompt cache warming policy. The provider's stream implementation must
-	 * publish a CacheWarmPlan through options.onCacheWarmPlan.
-	 */
-	cacheWarming?: {
-		mode: "off" | "streaming" | "idle";
-		refreshAfterSeconds?: number;
-		maxDurationSeconds?: number;
-	};
 	/** Models to register. If provided, replaces all existing models for this provider. */
 	models?: ProviderModelConfig[];
 	/**
@@ -1589,6 +1580,8 @@ export interface ProviderModelConfig {
 	input: ("text" | "image")[];
 	/** Per-million-token cost rates and optional request-wide input pricing tiers. */
 	cost: Model<Api>["cost"];
+	/** Best-effort prompt cache lifetime in seconds per retention tier. Unset disables cache warming. */
+	promptCache?: Model<Api>["promptCache"];
 	/** Maximum context window size in tokens. */
 	contextWindow: number;
 	/** Maximum output tokens. */

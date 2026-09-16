@@ -30,10 +30,39 @@ export function formatTokens(count: number): string {
 	return `${Math.round(count / 1000000)}M`;
 }
 
+/** Fills as the next refresh approaches: empty right after a request, three quarters just before. */
+const CACHE_WARMING_FILL_FRAMES = ["○", "◔", "◑", "◕"];
+/** Spins while a refresh is in flight. */
+const CACHE_WARMING_SPIN_FRAMES = ["◐", "◓", "◑", "◒"];
+/** Keep spinning at least this long once a refresh starts, so short requests are still visible. */
+export const CACHE_WARMING_SPIN_MS = 2000;
+export const CACHE_WARMING_SPIN_FRAME_MS = 150;
+
+/** Time the current spin started, or undefined when the indicator should show the countdown fill. */
+export function cacheWarmingSpinStart(state: CacheWarmingState, now = Date.now()): number | undefined {
+	if (state.status === "warming") return state.startedAt;
+	if (state.status === "scheduled" && state.warmedAt !== undefined && now - state.warmedAt < CACHE_WARMING_SPIN_MS) {
+		return state.warmedAt;
+	}
+	return undefined;
+}
+
+export function formatCacheWarmingIndicator(state: CacheWarmingState, now = Date.now()): string | undefined {
+	if (state.status === "inactive") return undefined;
+	const spinStart = cacheWarmingSpinStart(state, now);
+	if (spinStart !== undefined) {
+		const frame = Math.floor((now - spinStart) / CACHE_WARMING_SPIN_FRAME_MS);
+		return CACHE_WARMING_SPIN_FRAMES[frame % CACHE_WARMING_SPIN_FRAMES.length];
+	}
+	if (state.status !== "scheduled") return undefined;
+	const progress = (now - state.scheduledAt) / Math.max(1, state.nextWarmAt - state.scheduledAt);
+	const frame = Math.min(CACHE_WARMING_FILL_FRAMES.length - 1, Math.max(0, Math.floor(progress * 4)));
+	return CACHE_WARMING_FILL_FRAMES[frame];
+}
+
 export function formatCacheWarmingStatus(state: CacheWarmingState, now = Date.now()): string {
 	if (state.status === "inactive") return "No refresh scheduled";
-	const suffix = state.mode === "streaming" ? " (while active)" : "";
-	if (state.status === "warming") return `Refreshing now${suffix}`;
+	if (state.status === "warming") return "Refreshing now";
 
 	let remainingSeconds = Math.max(0, Math.ceil((state.nextWarmAt - now) / 1000));
 	const hours = Math.floor(remainingSeconds / 3600);
@@ -44,7 +73,7 @@ export function formatCacheWarmingStatus(state: CacheWarmingState, now = Date.no
 	if (hours > 0) parts.push(`${hours}h`);
 	if (minutes > 0) parts.push(`${minutes}m`);
 	if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
-	return `Next refresh in ${parts.join(" ")}${suffix}`;
+	return `Next refresh in ${parts.join(" ")}`;
 }
 
 export function formatCwdForFooter(cwd: string, home: string | undefined): string {
@@ -149,13 +178,7 @@ export class FooterComponent implements Component {
 
 		// Build stats line
 		const statsParts = [];
-		const cacheWarmingState = this.session.cacheWarmingState;
-		let cacheWarmingIndicator = "";
-		if (cacheWarmingState.status === "scheduled") {
-			cacheWarmingIndicator = "♨";
-		} else if (cacheWarmingState.status === "warming") {
-			cacheWarmingIndicator = Math.floor(Date.now() / 500) % 2 === 0 ? theme.bold(theme.fg("accent", "♨")) : "♨";
-		}
+		const cacheWarmingIndicator = formatCacheWarmingIndicator(this.session.cacheWarmingState);
 		if (usageTotals.input) statsParts.push(`↑${formatTokens(usageTotals.input)}`);
 		if (usageTotals.output) statsParts.push(`↓${formatTokens(usageTotals.output)}`);
 		if (usageTotals.cacheRead) statsParts.push(`R${formatTokens(usageTotals.cacheRead)}`);
@@ -187,7 +210,7 @@ export class FooterComponent implements Component {
 		} else {
 			contextPercentStr = contextPercentDisplay;
 		}
-		if (cacheWarmingIndicator) statsParts.push(`${cacheWarmingIndicator} `);
+		if (cacheWarmingIndicator) statsParts.push(cacheWarmingIndicator);
 		statsParts.push(contextPercentStr);
 		if (areExperimentalFeaturesEnabled()) {
 			statsParts.push(`${theme.fg("dim", "•")} ${theme.bold(theme.fg("warning", "xp"))}`);

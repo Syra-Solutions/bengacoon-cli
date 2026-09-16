@@ -64,6 +64,7 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import { formatCacheWarmingMaxMinutes } from "../../core/cache-warmer.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -125,7 +126,13 @@ import { EarendilAnnouncementComponent } from "./components/earendil-announcemen
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-import { FooterComponent, formatCacheWarmingStatus, formatTokens } from "./components/footer.ts";
+import {
+	CACHE_WARMING_SPIN_FRAME_MS,
+	cacheWarmingSpinStart,
+	FooterComponent,
+	formatCacheWarmingStatus,
+	formatTokens,
+} from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
@@ -446,7 +453,7 @@ export class InteractiveMode {
 
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
-	private cacheWarmingPulseTimer?: ReturnType<typeof setInterval>;
+	private cacheWarmingAnimationTimer?: ReturnType<typeof setTimeout>;
 	private signalCleanupHandlers: Array<() => void> = [];
 
 	// Track if editor is in bash mode (text starts with !)
@@ -3164,15 +3171,31 @@ export class InteractiveMode {
 		});
 	}
 
+	/**
+	 * Re-render the footer indicator on its own clock: every frame while the
+	 * spinner runs, then once per quarter of the countdown until the next refresh.
+	 */
 	private updateCacheWarmingAnimation(): void {
-		if (this.session.cacheWarmingState.status === "warming") {
-			if (this.cacheWarmingPulseTimer === undefined) {
-				this.cacheWarmingPulseTimer = setInterval(() => this.ui.requestRender(), 500);
-				this.cacheWarmingPulseTimer.unref?.();
-			}
-		} else if (this.cacheWarmingPulseTimer !== undefined) {
-			clearInterval(this.cacheWarmingPulseTimer);
-			this.cacheWarmingPulseTimer = undefined;
+		if (this.cacheWarmingAnimationTimer !== undefined) {
+			clearTimeout(this.cacheWarmingAnimationTimer);
+			this.cacheWarmingAnimationTimer = undefined;
+		}
+		const state = this.session.cacheWarmingState;
+		const now = Date.now();
+		const spinStart = cacheWarmingSpinStart(state, now);
+		let delay: number | undefined;
+		if (spinStart !== undefined) {
+			delay = CACHE_WARMING_SPIN_FRAME_MS;
+		} else if (state.status === "scheduled") {
+			const quarter = Math.max(1, (state.nextWarmAt - state.scheduledAt) / 4);
+			delay = quarter - ((now - state.scheduledAt) % quarter);
+		}
+		if (delay !== undefined) {
+			this.cacheWarmingAnimationTimer = setTimeout(
+				() => this.updateCacheWarmingAnimation(),
+				Math.max(CACHE_WARMING_SPIN_FRAME_MS, delay),
+			);
+			this.cacheWarmingAnimationTimer.unref?.();
 		}
 		this.ui.requestRender();
 	}
@@ -4578,6 +4601,7 @@ export class InteractiveMode {
 			const defaultProvider = this.settingsManager.getDefaultProvider();
 			const defaultModelId = this.settingsManager.getDefaultModel();
 			const defaultModel = defaultProvider && defaultModelId ? `${defaultProvider}/${defaultModelId}` : "not set";
+			const cacheWarming = this.settingsManager.getCacheWarming();
 			selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
@@ -4593,6 +4617,8 @@ export class InteractiveMode {
 					followUpMode: this.session.followUpMode,
 					transport: this.settingsManager.getTransport(),
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
+					cacheWarmingMode: cacheWarming.mode,
+					cacheWarmingMaxMinutes: cacheWarming.maxMinutes,
 					thinkingLevel: this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
 					availableThinkingLevels: [...THINKING_LEVEL_OPTIONS],
 					modelThinkingLevels: this.settingsManager.getAllModelThinkingLevels(),
@@ -4665,6 +4691,15 @@ export class InteractiveMode {
 						this.settingsManager.setHttpIdleTimeoutMs(timeoutMs);
 						configureHttpDispatcher(timeoutMs);
 						this.showStatus(`HTTP idle timeout: ${formatHttpIdleTimeoutMs(timeoutMs)}`);
+					},
+					onCacheWarmingModeChange: (mode) => {
+						this.settingsManager.setCacheWarmingMode(mode);
+						if (mode === "off") this.session.stopCacheWarming();
+						this.showStatus(`Cache warming: ${mode}`);
+					},
+					onCacheWarmingMaxMinutesChange: (minutes) => {
+						this.settingsManager.setCacheWarmingMaxMinutes(minutes);
+						this.showStatus(`Cache warming duration: ${formatCacheWarmingMaxMinutes(minutes)}`);
 					},
 					onModelThinkingLevelChange: (provider, modelId, level) => {
 						this.settingsManager.setModelThinkingLevel(provider, modelId, level);
@@ -6275,11 +6310,10 @@ export class InteractiveMode {
 		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
 		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
 
-		const model = this.session.model;
-		const cacheWarmingEnabled =
-			model !== undefined && this.session.modelRuntime.getCacheWarmingSettings(model.provider) !== undefined;
-		if (cacheWarmingEnabled) {
+		const cacheWarming = this.settingsManager.getCacheWarming();
+		if (cacheWarming.mode !== "off") {
 			info += `\n${theme.bold("Cache Warming")}\n`;
+			info += `${theme.fg("dim", "Mode:")} ${cacheWarming.mode}, ${formatCacheWarmingMaxMinutes(cacheWarming.maxMinutes)}\n`;
 			info += `${theme.fg("dim", "Status:")} ${formatCacheWarmingStatus(this.session.cacheWarmingState)}\n`;
 		}
 
@@ -6635,9 +6669,9 @@ export class InteractiveMode {
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
-		if (this.cacheWarmingPulseTimer !== undefined) {
-			clearInterval(this.cacheWarmingPulseTimer);
-			this.cacheWarmingPulseTimer = undefined;
+		if (this.cacheWarmingAnimationTimer !== undefined) {
+			clearTimeout(this.cacheWarmingAnimationTimer);
+			this.cacheWarmingAnimationTimer = undefined;
 		}
 		this.footer.dispose();
 		this.footerDataProvider.dispose();

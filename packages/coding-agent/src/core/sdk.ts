@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -182,9 +183,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
-	const cacheWarmer = new CacheWarmer((result) =>
-		sessionManager.appendUsage("cache_warm", result.provider, result.model, result.usage),
-	);
 
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -306,6 +304,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
+	const cacheWarmer = new CacheWarmer(modelRuntime, sessionManager);
 
 	agent = new Agent({
 		initialState: {
@@ -316,9 +315,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
-			const isSessionRequest = options?.sessionId === sessionManager.getSessionId();
-			if (isSessionRequest) cacheWarmer.cancel();
-			const cacheWarming = isSessionRequest ? modelRuntime.getCacheWarmingSettings(model.provider) : undefined;
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
 			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".
@@ -328,13 +324,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const websocketConnectTimeoutMs =
 				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
 			const headerRunner = extensionRunnerRef.current;
-			return modelRuntime.streamSimple(model, context, {
+			const requestOptions: ModelsSimpleStreamOptions = {
 				...options,
 				timeoutMs,
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				onCacheWarmPlan: cacheWarming ? (plan) => cacheWarmer.start(plan, cacheWarming) : undefined,
 				transformHeaders: async (requestHeaders) => {
 					const headers = mergeProviderAttributionHeaders(
 						model,
@@ -346,7 +341,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						? headerRunner.emitBeforeProviderHeaders(headers ?? {})
 						: (headers ?? {});
 				},
-			});
+			};
+			// Compaction and summaries use their own routing ids; only session requests
+			// replace the cache entry, so warming restarts from them.
+			if (options?.sessionId === sessionManager.getSessionId()) {
+				cacheWarmer.start({ model, context, options: requestOptions }, settingsManager.getCacheWarming());
+			}
+			return modelRuntime.streamSimple(model, context, requestOptions);
 		},
 		onPayload: async (payload, _model) => {
 			const runner = extensionRunnerRef.current;

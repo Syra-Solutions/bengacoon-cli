@@ -41,7 +41,6 @@ export function buildBaseOptions(
 		sessionId: options?.sessionId,
 		headers: options?.headers,
 		onPayload: options?.onPayload,
-		onCacheWarmPlan: options?.onCacheWarmPlan,
 		onResponse: options?.onResponse,
 		timeoutMs: options?.timeoutMs,
 		websocketConnectTimeoutMs: options?.websocketConnectTimeoutMs,

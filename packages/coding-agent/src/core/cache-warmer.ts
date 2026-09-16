@@ -1,24 +1,95 @@
-import type { CacheWarmPlan, CacheWarmResult } from "@earendil-works/pi-ai";
-import type { ResolvedCacheWarmingSettings } from "./model-config.ts";
+import type { Api, Context, Model, ModelsSimpleStreamOptions, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { getProviderEnvValue } from "@earendil-works/pi-ai/utils/provider-env";
+import type { ModelRuntime } from "./model-runtime.ts";
+import type { SessionManager } from "./session-manager.ts";
+import type { CacheWarmingMode, CacheWarmingSettings } from "./settings-manager.ts";
+
+export const CACHE_WARMING_MODES: readonly CacheWarmingMode[] = ["off", "streaming", "idle"];
+
+export const CACHE_WARMING_MAX_MINUTES_CHOICES = [
+	{ label: "30 min", minutes: 30 },
+	{ label: "60 min", minutes: 60 },
+	{ label: "120 min", minutes: 120 },
+] as const;
+
+/** Fraction of the cache lifetime to wait before refreshing it. */
+const REFRESH_FRACTION = 0.8;
+
+export function formatCacheWarmingMaxMinutes(minutes: number): string {
+	return CACHE_WARMING_MAX_MINUTES_CHOICES.find((choice) => choice.minutes === minutes)?.label ?? `${minutes} min`;
+}
+
+/**
+ * Lifetime of the prompt cache entry a request writes, from the model's
+ * `promptCache` tier for the retention the request used. Undefined when the
+ * model has no lifetime for that tier or caching is off.
+ */
+export function getPromptCacheTtlMs(model: Model<Api>, options: SimpleStreamOptions | undefined): number | undefined {
+	const retention =
+		options?.cacheRetention ??
+		(getProviderEnvValue("PI_CACHE_RETENTION", options?.env) === "long" ? "long" : "short");
+	if (retention === "none") return undefined;
+	const seconds = model.promptCache?.[retention];
+	return seconds === undefined ? undefined : seconds * 1000;
+}
+
+/**
+ * Whether replaying the request with a one-token output cap leaves its cache
+ * entry untouched. Anthropic's budget-based thinking (Claude models without
+ * adaptive thinking) derives `budget_tokens` from `max_tokens`; the replay
+ * would get a different budget, which Anthropic keys the message cache on,
+ * and the model could still think for thousands of tokens.
+ */
+export function isReplayable(model: Model<Api>, options: SimpleStreamOptions | undefined): boolean {
+	if (!options?.reasoning || model.api !== "anthropic-messages") return true;
+	return (model as Model<"anthropic-messages">).compat?.forceAdaptiveThinking === true;
+}
+
+export type ActiveCacheWarmingMode = Exclude<CacheWarmingMode, "off">;
 
 export type CacheWarmingState =
 	| { status: "inactive" }
-	| { status: "scheduled"; mode: ResolvedCacheWarmingSettings["mode"]; nextWarmAt: number }
-	| { status: "warming"; mode: ResolvedCacheWarmingSettings["mode"]; startedAt: number };
+	| {
+			status: "scheduled";
+			mode: ActiveCacheWarmingMode;
+			scheduledAt: number;
+			nextWarmAt: number;
+			/** When the previous refresh of this run was sent, if any. */
+			warmedAt?: number;
+	  }
+	| { status: "warming"; mode: ActiveCacheWarmingMode; startedAt: number };
 
 export type CacheWarmingStateListener = (state: CacheWarmingState) => void;
 
+/** The request whose prompt cache entry should be kept warm, exactly as it was sent. */
+export interface CacheWarmRequest {
+	model: Model<Api>;
+	context: Context;
+	options: ModelsSimpleStreamOptions;
+}
+
+interface ActiveRun {
+	controller: AbortController;
+	deadline: number;
+	mode: ActiveCacheWarmingMode;
+	timer?: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Keeps one prompt cache entry alive by re-sending its request with a
+ * one-token output cap before the entry expires. `start` replaces any previous
+ * run and restarts the duration window; warm requests never extend it.
+ */
 export class CacheWarmer {
-	private generation = 0;
-	private timer?: ReturnType<typeof setTimeout>;
-	private abortController?: AbortController;
-	private cancelWhenIdle = false;
+	private active?: ActiveRun;
 	private state: CacheWarmingState = { status: "inactive" };
 	private readonly listeners = new Set<CacheWarmingStateListener>();
-	private readonly record: (result: CacheWarmResult) => void;
+	private readonly models: Pick<ModelRuntime, "streamSimple">;
+	private readonly sessionManager: Pick<SessionManager, "appendUsage">;
 
-	constructor(record: (result: CacheWarmResult) => void) {
-		this.record = record;
+	constructor(models: Pick<ModelRuntime, "streamSimple">, sessionManager: Pick<SessionManager, "appendUsage">) {
+		this.models = models;
+		this.sessionManager = sessionManager;
 	}
 
 	getState(): CacheWarmingState {
@@ -31,60 +102,80 @@ export class CacheWarmer {
 	}
 
 	cancel(): void {
-		this.stopCurrentPlan();
+		const active = this.active;
+		this.active = undefined;
 		this.setState({ status: "inactive" });
+		if (!active) return;
+		if (active.timer) clearTimeout(active.timer);
+		active.controller.abort();
 	}
 
-	onIdle(): void {
-		if (this.cancelWhenIdle) this.cancel();
+	onAgentSettled(): void {
+		if (this.active?.mode === "streaming") this.cancel();
 	}
 
-	start(plan: CacheWarmPlan, settings: ResolvedCacheWarmingSettings): void {
-		this.stopCurrentPlan();
-		this.cancelWhenIdle = settings.mode === "streaming";
-		const generation = this.generation;
-		const deadline = Date.now() + settings.maxDurationMs;
-		// Default conservatively to 80% of the provider TTL. Explicit cadences
-		// may use up to 95%, preserving a small margin for timer and network jitter.
-		const defaultRefreshAfterMs = Math.max(1, Math.floor(plan.ttlMs * 0.8));
-		const maxRefreshAfterMs = Math.max(1, Math.floor(plan.ttlMs * 0.95));
-		const refreshAfterMs = Math.min(settings.refreshAfterMs ?? defaultRefreshAfterMs, maxRefreshAfterMs);
+	/**
+	 * Keep the prompt cache entry written by `request` warm. Cancels any
+	 * previous run first, so calling this for every session request also stops
+	 * warming a superseded context. Does nothing further when warming is off or
+	 * the model's cache lifetime is unknown.
+	 */
+	start(request: CacheWarmRequest, settings: Required<CacheWarmingSettings>): void {
+		this.cancel();
+		if (settings.mode === "off" || !isReplayable(request.model, request.options)) return;
+		const ttlMs = getPromptCacheTtlMs(request.model, request.options);
+		if (ttlMs === undefined) return;
 
-		const schedule = () => {
-			if (generation !== this.generation) return;
-			const nextWarmAt = Date.now() + refreshAfterMs;
-			if (nextWarmAt > deadline) {
+		const active: ActiveRun = {
+			controller: new AbortController(),
+			deadline: Date.now() + settings.maxMinutes * 60_000,
+			mode: settings.mode,
+		};
+		this.active = active;
+		const refreshAfterMs = Math.max(1, Math.floor(ttlMs * REFRESH_FRACTION));
+		let warmedAt: number | undefined;
+
+		const schedule = (): void => {
+			if (this.active !== active) return;
+			const scheduledAt = Date.now();
+			const nextWarmAt = scheduledAt + refreshAfterMs;
+			if (nextWarmAt > active.deadline) {
+				this.active = undefined;
 				this.setState({ status: "inactive" });
 				return;
 			}
-			this.setState({ status: "scheduled", mode: settings.mode, nextWarmAt });
-			this.timer = setTimeout(async () => {
-				this.timer = undefined;
-				const controller = new AbortController();
-				this.abortController = controller;
-				this.setState({ status: "warming", mode: settings.mode, startedAt: Date.now() });
+			this.setState({ status: "scheduled", mode: active.mode, scheduledAt, nextWarmAt, warmedAt });
+			active.timer = setTimeout(async () => {
+				active.timer = undefined;
+				const startedAt = Date.now();
+				this.setState({ status: "warming", mode: active.mode, startedAt });
 				try {
-					const result = await plan.warm(controller.signal);
-					this.record(result);
+					const message = await this.models
+						.streamSimple(request.model, request.context, {
+							...request.options,
+							maxTokens: 1,
+							maxRetries: 0,
+							signal: active.controller.signal,
+						})
+						.result();
+					if (message.stopReason !== "error" && message.stopReason !== "aborted") {
+						this.sessionManager.appendUsage(
+							"cache_warm",
+							message.provider,
+							message.responseModel ?? message.model,
+							message.usage,
+						);
+					}
 				} catch {
 					// Cache warming is best-effort and must not affect the active agent run.
 				} finally {
-					if (this.abortController === controller) this.abortController = undefined;
-					if (generation === this.generation) schedule();
+					warmedAt = startedAt;
+					schedule();
 				}
 			}, refreshAfterMs);
-			this.timer.unref?.();
+			active.timer.unref?.();
 		};
 		schedule();
-	}
-
-	private stopCurrentPlan(): void {
-		this.generation++;
-		if (this.timer) clearTimeout(this.timer);
-		this.timer = undefined;
-		this.abortController?.abort();
-		this.abortController = undefined;
-		this.cancelWhenIdle = false;
 	}
 
 	private setState(state: CacheWarmingState): void {

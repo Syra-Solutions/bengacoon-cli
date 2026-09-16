@@ -107,6 +107,12 @@ export interface ThinkingBudgets {
 // Base options all providers share
 export type CacheRetention = "none" | "short" | "long";
 
+/**
+ * Best-effort prompt cache lifetime in seconds for each retention tier a request can ask for.
+ * A missing tier means the lifetime is unknown; pi does not warm such caches.
+ */
+export type ModelPromptCache = Partial<Record<Exclude<CacheRetention, "none">, number>>;
+
 export type Transport = "sse" | "websocket" | "websocket-cached" | "auto";
 
 /** Provider-scoped environment overrides. Values take precedence over process.env. */
@@ -118,24 +124,6 @@ export type SessionAffinityFormat = "openai" | "openai-nosession" | "openrouter"
 export interface ProviderResponse {
 	status: number;
 	headers: Record<string, string>;
-}
-
-/** Usage produced by a provider-owned prompt cache refresh. */
-export interface CacheWarmResult {
-	provider: string;
-	model: string;
-	usage: Usage;
-}
-
-/**
- * Provider-owned operation for refreshing the exact prompt cache entry created
- * by a request. Any provider adapter may publish one through `onCacheWarmPlan`.
- */
-export interface CacheWarmPlan {
-	/** Lifetime of the provider cache entry. Used to choose a safe default refresh cadence. */
-	ttlMs: number;
-	/** Refresh the cache entry and return its billable usage. */
-	warm: (signal: AbortSignal) => Promise<CacheWarmResult>;
 }
 
 /** Authentication, HTTP transport, and lifecycle callbacks shared by provider requests. */
@@ -161,13 +149,6 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 	 * Return undefined to keep the payload unchanged.
 	 */
 	onPayload?: (payload: unknown, model: TModel) => unknown | undefined | Promise<unknown | undefined>;
-	/**
-	 * Receives a provider-owned operation that refreshes this request's prompt
-	 * cache. Provider adapters should invoke this only after the original request
-	 * has been accepted and only when caching is active. The plan must preserve
-	 * the provider-native payload and routing data needed to hit the same cache.
-	 */
-	onCacheWarmPlan?: (plan: CacheWarmPlan) => void;
 	/**
 	 * Optional callback invoked after an HTTP response is received.
 	 */
@@ -940,6 +921,8 @@ export interface Model<TApi extends Api> {
 	thinkingLevelMap?: ThinkingLevelMap;
 	input: ("text" | "image")[];
 	cost: ModelCost;
+	/** Prompt cache lifetimes per retention tier. Unset when the provider's cache behavior is unknown. */
+	promptCache?: ModelPromptCache;
 	contextWindow: number;
 	maxTokens: number;
 	/** Default sampling parameters for this model. See {@link StreamOptions.samplingParams}; per-request keys override these. */

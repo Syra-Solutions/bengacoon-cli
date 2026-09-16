@@ -8,8 +8,8 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/ag
 - [Full Example](#full-example)
 - [Supported APIs](#supported-apis)
 - [Provider Configuration](#provider-configuration)
-- [Cache Warming](#cache-warming)
 - [Model Configuration](#model-configuration)
+- [Prompt Cache Lifetimes](#prompt-cache-lifetimes)
 - [Overriding Built-in Providers](#overriding-built-in-providers)
 - [Per-model Overrides](#per-model-overrides)
 - [Anthropic Messages Compatibility](#anthropic-messages-compatibility)
@@ -140,41 +140,10 @@ Set `api` at provider level (default for all models) or model level (override pe
 | `oauth` | Dynamic OAuth provider type. Currently supports `"radius"`; requires the gateway `baseUrl`. |
 | `headers` | Custom headers (see value resolution below) |
 | `authHeader` | Set `true` to add `Authorization: Bearer <apiKey>` automatically |
-| `cacheWarming` | Optional provider-neutral prompt cache warming mode and cadence |
 | `models` | Array of model configurations |
 | `modelOverrides` | Per-model overrides for built-in or extension-registered models on this provider |
 
 For providers with `models`, non-built-in provider configs need `baseUrl` and an `api` value at either provider or model level. `apiKey` is not required to load the file: models become available when auth is configured through `/login`/`auth.json`, CLI `--api-key`, or provider `apiKey`. If no auth is configured, the models load but stay unavailable in `/model` and `--list-models`.
-
-### Cache Warming
-
-Cache warming is provider-neutral. A supporting provider adapter captures the final provider-native request and supplies an operation for refreshing the same prompt cache entry. Configure the scheduling policy on any provider:
-
-```json
-{
-  "providers": {
-    "my-provider": {
-      "cacheWarming": {
-        "mode": "streaming",
-        "refreshAfterSeconds": 240,
-        "maxDurationSeconds": 3600
-      }
-    }
-  }
-}
-```
-
-Modes:
-
-- `"off"`: no warming.
-- `"streaming"`: warm while the agent run is active, including tool execution, then stop when the agent becomes idle.
-- `"idle"`: also continue warming while Pi is idle, until the request is superseded, the session closes, or the maximum duration is reached.
-
-When omitted, `refreshAfterSeconds` defaults to 80% of the cache TTL reported by the provider adapter. Explicit values are capped at 95% of that TTL to retain a margin for timer and network jitter. `maxDurationSeconds` defaults to 3600. Each warm request incurs the provider's cache-read cost. Usage and cost are recorded in session totals but do not enter model context.
-
-The built-in Anthropic Messages adapter supports cache warming. Custom API adapters can support it for any provider by publishing a `CacheWarmPlan`; see [Custom Providers](custom-provider.md#cache-warming). Configuring warming for an adapter that does not publish a plan has no effect.
-
-While warming is scheduled, the footer shows `♨` immediately before context usage; the indicator pulses while a refresh request is running. When cache warming is enabled, `/session` shows the next scheduled refresh, reports that a refresh is in progress, or indicates that no refresh is scheduled. The section is omitted when cache warming is disabled.
 
 ### Value Resolution
 
@@ -240,6 +209,7 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `maxTokens` | No | `16384` | Maximum output tokens |
 | `samplingParams` | No | omitted | Sampling parameters merged verbatim into every request body (see below) |
 | `cost` | No | all zeros | Per-million-token rates with optional request-wide input pricing tiers |
+| `promptCache` | No | omitted | Best-effort prompt cache lifetime in seconds per retention tier (see below) |
 | `compat` | No | provider `compat` | Provider compatibility overrides. Merged with provider-level `compat` when both are set. |
 
 A cost tier supplies a complete alternate rate set and applies to the full request when total input usage (`input + cacheRead + cacheWrite`) exceeds `inputTokensAbove`. When multiple tiers match, the highest threshold wins.
@@ -267,6 +237,19 @@ A cost tier supplies a complete alternate rate set and applies to the full reque
 Current behavior:
 - `/model`, `--list-models`, and the interactive footer display entries by model `id`.
 - The configured `name` is used for model matching and secondary model detail text. It does not replace the footer/status-bar model id.
+
+### Prompt Cache Lifetimes
+
+`promptCache` states how long the provider keeps a prompt cache entry alive for each retention tier pi can request (`short` is the default tier; `long` is used when `PI_CACHE_RETENTION=long`). Values are seconds and are estimates: providers publish ranges, so pick the conservative end.
+
+```json
+{
+  "id": "claude-sonnet-5",
+  "promptCache": { "short": 300, "long": 3600 }
+}
+```
+
+The built-in catalog fills this in for direct Anthropic (5 min / 1 h) and direct OpenAI (5 min / 24 h, or 30 min for models that use `prompt_cache_options`). Proxies such as OpenRouter and custom providers have no entry. A model without a value for the tier a request used is never warmed; see [Cache Warming](settings.md#cache-warming).
 
 ### Sampling Parameters
 
@@ -391,7 +374,23 @@ Use `modelOverrides` to customize built-in models and matching extension-registe
 }
 ```
 
-`modelOverrides` supports these fields per model: `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, `compat`.
+`modelOverrides` supports these fields per model: `name`, `reasoning`, `thinkingLevelMap`, `input`, `cost` (partial), `promptCache` (merged per tier), `contextWindow`, `maxTokens`, `samplingParams` (merged per key), `headers`, `compat`.
+
+Use a `promptCache` override to enable cache warming through a proxy whose backing cache you know, for example OpenRouter routed to Anthropic:
+
+```json
+{
+  "providers": {
+    "openrouter": {
+      "modelOverrides": {
+        "anthropic/claude-sonnet-4": {
+          "promptCache": { "short": 300 }
+        }
+      }
+    }
+  }
+}
+```
 
 Direct OpenAI GPT-5.6 Sol, Terra, and Luna default to a `272000` context window so requests remain within OpenAI's short-context pricing tier. To opt into OpenAI's 1.05M context window, increase it for each model you use:
 
