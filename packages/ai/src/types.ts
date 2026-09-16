@@ -120,14 +120,21 @@ export interface ProviderResponse {
 	headers: Record<string, string>;
 }
 
+/** Usage produced by a provider-owned prompt cache refresh. */
 export interface CacheWarmResult {
 	provider: string;
 	model: string;
 	usage: Usage;
 }
 
+/**
+ * Provider-owned operation for refreshing the exact prompt cache entry created
+ * by a request. Any provider adapter may publish one through `onCacheWarmPlan`.
+ */
 export interface CacheWarmPlan {
+	/** Lifetime of the provider cache entry. Used to choose a safe default refresh cadence. */
 	ttlMs: number;
+	/** Refresh the cache entry and return its billable usage. */
 	warm: (signal: AbortSignal) => Promise<CacheWarmResult>;
 }
 
@@ -154,7 +161,12 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 	 * Return undefined to keep the payload unchanged.
 	 */
 	onPayload?: (payload: unknown, model: TModel) => unknown | undefined | Promise<unknown | undefined>;
-	/** Receives an operation that refreshes this request's prompt cache. */
+	/**
+	 * Receives a provider-owned operation that refreshes this request's prompt
+	 * cache. Provider adapters should invoke this only after the original request
+	 * has been accepted and only when caching is active. The plan must preserve
+	 * the provider-native payload and routing data needed to hit the same cache.
+	 */
 	onCacheWarmPlan?: (plan: CacheWarmPlan) => void;
 	/**
 	 * Optional callback invoked after an HTTP response is received.

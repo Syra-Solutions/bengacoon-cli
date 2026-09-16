@@ -73,8 +73,10 @@ export interface ModelChangeEntry extends SessionEntryBase {
 	modelId: string;
 }
 
-export interface CacheWarmEntry extends SessionEntryBase {
-	type: "cache_warm";
+export interface UsageEntry extends SessionEntryBase {
+	type: "usage";
+	/** Arbitrary usage category, such as "cache_warm". */
+	kind: string;
 	provider: string;
 	model: string;
 	usage: Usage;
@@ -161,7 +163,7 @@ export type SessionEntry =
 	| SessionMessageEntry
 	| ThinkingLevelChangeEntry
 	| ModelChangeEntry
-	| CacheWarmEntry
+	| UsageEntry
 	| CompactionEntry
 	| BranchSummaryEntry
 	| CustomEntry
@@ -1126,12 +1128,14 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	appendCacheWarm(provider: string, model: string, usage: Usage): string {
-		const entry: CacheWarmEntry = {
-			type: "cache_warm",
+	/** Append model-attributed usage that does not participate in LLM context. */
+	appendUsage(kind: string, provider: string, model: string, usage: Usage): string {
+		const entry: UsageEntry = {
+			type: "usage",
 			id: generateId(this.byId),
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
+			kind,
 			provider,
 			model,
 			usage,

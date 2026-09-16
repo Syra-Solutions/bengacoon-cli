@@ -20,7 +20,13 @@ import {
 	type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
-import type { ModelConfig, ModelsJsonModel, ModelsJsonModelOverride, ModelsJsonProvider } from "./model-config.ts";
+import type {
+	CacheWarmingConfig,
+	ModelConfig,
+	ModelsJsonModel,
+	ModelsJsonModelOverride,
+	ModelsJsonProvider,
+} from "./model-config.ts";
 import {
 	clearConfigValueCache,
 	getConfigValueEnvVarNames,
@@ -55,6 +61,7 @@ export interface ProviderConfigInput {
 	) => AssistantMessageEventStream;
 	headers?: Record<string, string>;
 	authHeader?: boolean;
+	cacheWarming?: CacheWarmingConfig;
 	oauth?: ExtensionOAuthConfig;
 	models?: Array<{
 		id: string;

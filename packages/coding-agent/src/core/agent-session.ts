@@ -3418,7 +3418,7 @@ export class AgentSession {
 		const usageTotals = createUsageTotals();
 
 		for (const entry of this.sessionManager.getEntries()) {
-			if (entry.type === "cache_warm") {
+			if (entry.type === "usage") {
 				addUsageToTotals(usageTotals, entry.usage);
 			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 				addUsageToTotals(usageTotals, entry.usage);

@@ -30,9 +30,13 @@ export class CacheWarmer {
 		this.cancelWhenIdle = settings.mode === "streaming";
 		const generation = this.generation;
 		const deadline = Date.now() + settings.maxDurationMs;
+		// The provider owns the cache TTL. Keep an explicit cadence when it is
+		// safe, but cap it so a provider with a shorter TTL still stays warm.
+		const safeRefreshAfterMs = Math.max(1, Math.floor(plan.ttlMs * 0.8));
+		const refreshAfterMs = Math.min(settings.refreshAfterMs ?? safeRefreshAfterMs, safeRefreshAfterMs);
 
 		const schedule = () => {
-			if (generation !== this.generation || Date.now() + settings.refreshAfterMs > deadline) return;
+			if (generation !== this.generation || Date.now() + refreshAfterMs > deadline) return;
 			this.timer = setTimeout(async () => {
 				this.timer = undefined;
 				const controller = new AbortController();
@@ -46,7 +50,7 @@ export class CacheWarmer {
 					if (this.abortController === controller) this.abortController = undefined;
 					if (generation === this.generation) schedule();
 				}
-			}, settings.refreshAfterMs);
+			}, refreshAfterMs);
 			this.timer.unref?.();
 		};
 		schedule();

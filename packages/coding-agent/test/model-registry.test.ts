@@ -1046,6 +1046,21 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("dynamic provider lifecycle", () => {
+		test("extension providers can configure cache warming", async () => {
+			const registry = await createModelRegistry(authStorage, modelsJsonPath);
+
+			registry.registerProvider("custom-provider", {
+				...providerConfig("https://custom.test/v1", [{ id: "custom-model" }], "custom-api"),
+				cacheWarming: { mode: "idle", maxDurationSeconds: 30 },
+			});
+
+			expect(getModelRuntime(registry).getCacheWarmingSettings("custom-provider")).toEqual({
+				mode: "idle",
+				refreshAfterMs: undefined,
+				maxDurationMs: 30_000,
+			});
+		});
+
 		test("getProviderDisplayName resolves registered, OAuth, built-in, and fallback names", async () => {
 			const registry = await createModelRegistry(authStorage, modelsJsonPath);
 

@@ -89,10 +89,12 @@ export class FooterComponent implements Component {
 		let latestCacheHitRate: number | undefined;
 
 		for (const entry of this.session.sessionManager.getEntries()) {
-			if (entry.type === "cache_warm") {
+			if (entry.type === "usage") {
 				addUsageToTotals(usageTotals, entry.usage);
-				const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
-				latestCacheHitRate = promptTokens > 0 ? (entry.usage.cacheRead / promptTokens) * 100 : undefined;
+				if (entry.kind === "cache_warm") {
+					const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
+					latestCacheHitRate = promptTokens > 0 ? (entry.usage.cacheRead / promptTokens) * 100 : undefined;
+				}
 			} else if (entry.type === "message" && entry.message.role === "assistant") {
 				addUsageToTotals(usageTotals, entry.message.usage);
 				const promptTokens =

@@ -140,7 +140,7 @@ Set `api` at provider level (default for all models) or model level (override pe
 | `oauth` | Dynamic OAuth provider type. Currently supports `"radius"`; requires the gateway `baseUrl`. |
 | `headers` | Custom headers (see value resolution below) |
 | `authHeader` | Set `true` to add `Authorization: Bearer <apiKey>` automatically |
-| `cacheWarming` | Optional prompt cache warming mode and cadence; currently supported by Anthropic Messages |
+| `cacheWarming` | Optional provider-neutral prompt cache warming mode and cadence |
 | `models` | Array of model configurations |
 | `modelOverrides` | Per-model overrides for built-in or extension-registered models on this provider |
 
@@ -148,12 +148,12 @@ For providers with `models`, non-built-in provider configs need `baseUrl` and an
 
 ### Cache Warming
 
-Anthropic prompt cache warming replays the latest request as a non-streaming, zero-output-token request. Configure it on the provider:
+Cache warming is provider-neutral. A supporting provider adapter captures the final provider-native request and supplies an operation for refreshing the same prompt cache entry. Configure the scheduling policy on any provider:
 
 ```json
 {
   "providers": {
-    "anthropic": {
+    "my-provider": {
       "cacheWarming": {
         "mode": "streaming",
         "refreshAfterSeconds": 240,
@@ -170,7 +170,9 @@ Modes:
 - `"streaming"`: warm while the agent run is active, including tool execution, then stop when the agent becomes idle.
 - `"idle"`: also continue warming while Pi is idle, until the request is superseded, the session closes, or the maximum duration is reached.
 
-`refreshAfterSeconds` defaults to 240 and must be shorter than the provider cache TTL. `maxDurationSeconds` defaults to 3600. Each warm request incurs the provider's cache-read cost. Usage and cost are recorded in session totals but do not enter model context.
+When omitted, `refreshAfterSeconds` is derived from the cache TTL reported by the provider adapter. Explicit values are capped at 80% of that TTL so the entry cannot expire between refreshes. `maxDurationSeconds` defaults to 3600. Each warm request incurs the provider's cache-read cost. Usage and cost are recorded in session totals but do not enter model context.
+
+The built-in Anthropic Messages adapter supports cache warming. Custom API adapters can support it for any provider by publishing a `CacheWarmPlan`; see [Custom Providers](custom-provider.md#cache-warming). Configuring warming for an adapter that does not publish a plan has no effect.
 
 ### Value Resolution
 

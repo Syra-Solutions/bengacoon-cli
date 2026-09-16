@@ -391,11 +391,12 @@ export class ModelRuntime implements Models {
 	}
 
 	getCacheWarmingSettings(providerId: string): ResolvedCacheWarmingSettings | undefined {
-		const settings = this.config.getProvider(providerId)?.cacheWarming;
+		const settings =
+			this.config.getProvider(providerId)?.cacheWarming ?? this.extensionProviders.get(providerId)?.cacheWarming;
 		if (!settings || settings.mode === "off") return undefined;
 		return {
 			mode: settings.mode,
-			refreshAfterMs: (settings.refreshAfterSeconds ?? 240) * 1000,
+			refreshAfterMs: settings.refreshAfterSeconds === undefined ? undefined : settings.refreshAfterSeconds * 1000,
 			maxDurationMs: (settings.maxDurationSeconds ?? 3600) * 1000,
 		};
 	}

@@ -231,9 +231,15 @@ export type ModelsJsonModel = Static<typeof ModelDefinitionSchema>;
 export type ModelsJsonModelOverride = Static<typeof ModelOverrideSchema>;
 export type ModelsJsonProvider = Static<typeof ProviderConfigSchema>;
 export type CacheWarmingMode = Static<typeof CacheWarmingSchema>["mode"];
+export interface CacheWarmingConfig {
+	mode: CacheWarmingMode;
+	refreshAfterSeconds?: number;
+	maxDurationSeconds?: number;
+}
 export interface ResolvedCacheWarmingSettings {
 	mode: Exclude<CacheWarmingMode, "off">;
-	refreshAfterMs: number;
+	/** Undefined uses a provider-specific cadence derived from the cache plan's TTL. */
+	refreshAfterMs?: number;
 	maxDurationMs: number;
 }
 type ModelsJson = Static<typeof ModelsConfigSchema>;

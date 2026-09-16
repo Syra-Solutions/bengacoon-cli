@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CacheWarmer } from "../src/core/cache-warmer.ts";
 
 const result: CacheWarmResult = {
-	provider: "anthropic",
-	model: "claude-test",
+	provider: "custom-provider",
+	model: "custom-model",
 	usage: {
 		input: 0,
 		output: 0,
@@ -30,6 +30,28 @@ describe("CacheWarmer", () => {
 
 		expect(warm).toHaveBeenCalledTimes(2);
 		expect(record).toHaveBeenCalledTimes(2);
+	});
+
+	it("derives the default cadence from the provider cache TTL", async () => {
+		vi.useFakeTimers();
+		const warm = vi.fn(async () => result);
+		const warmer = new CacheWarmer(() => {});
+
+		warmer.start({ ttlMs: 100, warm }, { mode: "idle", maxDurationMs: 250 });
+		await vi.advanceTimersByTimeAsync(250);
+
+		expect(warm).toHaveBeenCalledTimes(3);
+	});
+
+	it("caps an explicit cadence to the provider cache TTL", async () => {
+		vi.useFakeTimers();
+		const warm = vi.fn(async () => result);
+		const warmer = new CacheWarmer(() => {});
+
+		warmer.start({ ttlMs: 100, warm }, { mode: "idle", refreshAfterMs: 500, maxDurationMs: 170 });
+		await vi.advanceTimersByTimeAsync(170);
+
+		expect(warm).toHaveBeenCalledTimes(2);
 	});
 
 	it("stops streaming mode on idle but keeps idle mode active", async () => {

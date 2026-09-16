@@ -208,11 +208,11 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
-	it("includes cache warming usage without adding messages", async () => {
+	it("includes arbitrary usage entries without adding messages", async () => {
 		const { session, sessionManager } = await createSession();
 
 		try {
-			sessionManager.appendCacheWarm("anthropic", model.id, {
+			sessionManager.appendUsage("custom_operation", "anthropic", model.id, {
 				input: 0,
 				output: 0,
 				cacheRead: 100,
@@ -221,6 +221,8 @@ describe("AgentSession.getSessionStats", () => {
 				cost: { input: 0, output: 0, cacheRead: 0.01, cacheWrite: 0, total: 0.01 },
 			});
 
+			const [entry] = sessionManager.getEntries();
+			expect(entry).toMatchObject({ type: "usage", kind: "custom_operation" });
 			const stats = session.getSessionStats();
 			expect(stats.tokens).toEqual({ input: 0, output: 0, cacheRead: 100, cacheWrite: 0, total: 100 });
 			expect(stats.totalMessages).toBe(0);

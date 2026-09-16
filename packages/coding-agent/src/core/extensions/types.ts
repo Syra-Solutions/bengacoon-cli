@@ -1536,6 +1536,15 @@ export interface ProviderConfig {
 	headers?: Record<string, string>;
 	/** If true, adds Authorization: Bearer header with the resolved API key. */
 	authHeader?: boolean;
+	/**
+	 * Prompt cache warming policy. The provider's stream implementation must
+	 * publish a CacheWarmPlan through options.onCacheWarmPlan.
+	 */
+	cacheWarming?: {
+		mode: "off" | "streaming" | "idle";
+		refreshAfterSeconds?: number;
+		maxDurationSeconds?: number;
+	};
 	/** Models to register. If provided, replaces all existing models for this provider. */
 	models?: ProviderModelConfig[];
 	/**

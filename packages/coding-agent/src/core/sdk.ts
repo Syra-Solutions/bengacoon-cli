@@ -183,7 +183,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
 	const cacheWarmer = new CacheWarmer((result) =>
-		sessionManager.appendCacheWarm(result.provider, result.model, result.usage),
+		sessionManager.appendUsage("cache_warm", result.provider, result.model, result.usage),
 	);
 
 	if (!resourceLoader) {
