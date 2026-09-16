@@ -125,7 +125,7 @@ import { EarendilAnnouncementComponent } from "./components/earendil-announcemen
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
-import { FooterComponent, formatTokens } from "./components/footer.ts";
+import { FooterComponent, formatCacheWarmingStatus, formatTokens } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
@@ -446,6 +446,7 @@ export class InteractiveMode {
 
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
+	private cacheWarmingPulseTimer?: ReturnType<typeof setInterval>;
 	private signalCleanupHandlers: Array<() => void> = [];
 
 	// Track if editor is in bash mode (text starts with !)
@@ -1945,6 +1946,7 @@ export class InteractiveMode {
 		}
 		this.footer.setSession(this.session);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
+		this.updateCacheWarmingAnimation();
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.outputPad = this.settingsManager.getOutputPad();
@@ -3162,6 +3164,19 @@ export class InteractiveMode {
 		});
 	}
 
+	private updateCacheWarmingAnimation(): void {
+		if (this.session.cacheWarmingState.status === "warming") {
+			if (this.cacheWarmingPulseTimer === undefined) {
+				this.cacheWarmingPulseTimer = setInterval(() => this.ui.requestRender(), 500);
+				this.cacheWarmingPulseTimer.unref?.();
+			}
+		} else if (this.cacheWarmingPulseTimer !== undefined) {
+			clearInterval(this.cacheWarmingPulseTimer);
+			this.cacheWarmingPulseTimer = undefined;
+		}
+		this.ui.requestRender();
+	}
+
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.isInitialized) {
 			await this.init();
@@ -3197,6 +3212,10 @@ export class InteractiveMode {
 			case "queue_update":
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
+				break;
+
+			case "cache_warming_state_change":
+				this.updateCacheWarmingAnimation();
 				break;
 
 			case "entry_appended":
@@ -6256,6 +6275,14 @@ export class InteractiveMode {
 		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
 		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
 
+		const model = this.session.model;
+		const cacheWarmingEnabled =
+			model !== undefined && this.session.modelRuntime.getCacheWarmingSettings(model.provider) !== undefined;
+		if (cacheWarmingEnabled) {
+			info += `\n${theme.bold("Cache Warming")}\n`;
+			info += `${theme.fg("dim", "Status:")} ${formatCacheWarmingStatus(this.session.cacheWarmingState)}\n`;
+		}
+
 		if (stats.cost > 0 || cacheWaste.missedTokens > 0) {
 			info += `\n${theme.bold("Cost")}\n`;
 			info += `${theme.fg("dim", "Total:")} $${stats.cost.toFixed(3)}`;
@@ -6608,6 +6635,10 @@ export class InteractiveMode {
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
+		if (this.cacheWarmingPulseTimer !== undefined) {
+			clearInterval(this.cacheWarmingPulseTimer);
+			this.cacheWarmingPulseTimer = undefined;
+		}
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
 		if (this.unsubscribe) {

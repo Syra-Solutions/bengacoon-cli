@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
+import type { CacheWarmingState } from "../../../core/cache-warmer.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { addUsageToTotals, createUsageTotals } from "../../../core/usage-totals.ts";
@@ -27,6 +28,23 @@ export function formatTokens(count: number): string {
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
 	return `${Math.round(count / 1000000)}M`;
+}
+
+export function formatCacheWarmingStatus(state: CacheWarmingState, now = Date.now()): string {
+	if (state.status === "inactive") return "No refresh scheduled";
+	const suffix = state.mode === "streaming" ? " (while active)" : "";
+	if (state.status === "warming") return `Refreshing now${suffix}`;
+
+	let remainingSeconds = Math.max(0, Math.ceil((state.nextWarmAt - now) / 1000));
+	const hours = Math.floor(remainingSeconds / 3600);
+	remainingSeconds %= 3600;
+	const minutes = Math.floor(remainingSeconds / 60);
+	const seconds = remainingSeconds % 60;
+	const parts: string[] = [];
+	if (hours > 0) parts.push(`${hours}h`);
+	if (minutes > 0) parts.push(`${minutes}m`);
+	if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+	return `Next refresh in ${parts.join(" ")}${suffix}`;
 }
 
 export function formatCwdForFooter(cwd: string, home: string | undefined): string {
@@ -131,6 +149,13 @@ export class FooterComponent implements Component {
 
 		// Build stats line
 		const statsParts = [];
+		const cacheWarmingState = this.session.cacheWarmingState;
+		let cacheWarmingIndicator = "";
+		if (cacheWarmingState.status === "scheduled") {
+			cacheWarmingIndicator = "♨";
+		} else if (cacheWarmingState.status === "warming") {
+			cacheWarmingIndicator = Math.floor(Date.now() / 500) % 2 === 0 ? theme.bold(theme.fg("accent", "♨")) : "♨";
+		}
 		if (usageTotals.input) statsParts.push(`↑${formatTokens(usageTotals.input)}`);
 		if (usageTotals.output) statsParts.push(`↓${formatTokens(usageTotals.output)}`);
 		if (usageTotals.cacheRead) statsParts.push(`R${formatTokens(usageTotals.cacheRead)}`);
@@ -162,6 +187,7 @@ export class FooterComponent implements Component {
 		} else {
 			contextPercentStr = contextPercentDisplay;
 		}
+		if (cacheWarmingIndicator) statsParts.push(`${cacheWarmingIndicator} `);
 		statsParts.push(contextPercentStr);
 		if (areExperimentalFeaturesEnabled()) {
 			statsParts.push(`${theme.fg("dim", "•")} ${theme.bold(theme.fg("warning", "xp"))}`);

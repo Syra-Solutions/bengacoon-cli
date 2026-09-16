@@ -170,9 +170,11 @@ Modes:
 - `"streaming"`: warm while the agent run is active, including tool execution, then stop when the agent becomes idle.
 - `"idle"`: also continue warming while Pi is idle, until the request is superseded, the session closes, or the maximum duration is reached.
 
-When omitted, `refreshAfterSeconds` is derived from the cache TTL reported by the provider adapter. Explicit values are capped at 80% of that TTL so the entry cannot expire between refreshes. `maxDurationSeconds` defaults to 3600. Each warm request incurs the provider's cache-read cost. Usage and cost are recorded in session totals but do not enter model context.
+When omitted, `refreshAfterSeconds` defaults to 80% of the cache TTL reported by the provider adapter. Explicit values are capped at 95% of that TTL to retain a margin for timer and network jitter. `maxDurationSeconds` defaults to 3600. Each warm request incurs the provider's cache-read cost. Usage and cost are recorded in session totals but do not enter model context.
 
 The built-in Anthropic Messages adapter supports cache warming. Custom API adapters can support it for any provider by publishing a `CacheWarmPlan`; see [Custom Providers](custom-provider.md#cache-warming). Configuring warming for an adapter that does not publish a plan has no effect.
+
+While warming is scheduled, the footer shows `♨` immediately before context usage; the indicator pulses while a refresh request is running. When cache warming is enabled, `/session` shows the next scheduled refresh, reports that a refresh is in progress, or indicates that no refresh is scheduled. The section is omitted when cache warming is disabled.
 
 ### Value Resolution
 

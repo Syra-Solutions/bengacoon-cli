@@ -30,6 +30,7 @@ describe("CacheWarmer", () => {
 
 		expect(warm).toHaveBeenCalledTimes(2);
 		expect(record).toHaveBeenCalledTimes(2);
+		expect(warmer.getState()).toEqual({ status: "inactive" });
 	});
 
 	it("derives the default cadence from the provider cache TTL", async () => {
@@ -43,15 +44,44 @@ describe("CacheWarmer", () => {
 		expect(warm).toHaveBeenCalledTimes(3);
 	});
 
-	it("caps an explicit cadence to the provider cache TTL", async () => {
+	it("caps an explicit cadence at 95% of the provider cache TTL", async () => {
 		vi.useFakeTimers();
 		const warm = vi.fn(async () => result);
 		const warmer = new CacheWarmer(() => {});
 
-		warmer.start({ ttlMs: 100, warm }, { mode: "idle", refreshAfterMs: 500, maxDurationMs: 170 });
-		await vi.advanceTimersByTimeAsync(170);
+		warmer.start({ ttlMs: 100, warm }, { mode: "idle", refreshAfterMs: 500, maxDurationMs: 200 });
+		await vi.advanceTimersByTimeAsync(200);
 
 		expect(warm).toHaveBeenCalledTimes(2);
+	});
+
+	it("reports scheduled and in-flight warming state", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(1_000);
+		let finishWarm!: (value: CacheWarmResult) => void;
+		const warm = vi.fn(
+			() =>
+				new Promise<CacheWarmResult>((resolve) => {
+					finishWarm = resolve;
+				}),
+		);
+		const warmer = new CacheWarmer(() => {});
+		const states: string[] = [];
+		warmer.subscribe((state) => states.push(state.status));
+
+		warmer.start({ ttlMs: 300_000, warm }, { mode: "idle", refreshAfterMs: 100, maxDurationMs: 500 });
+		expect(warmer.getState()).toEqual({ status: "scheduled", mode: "idle", nextWarmAt: 1_100 });
+
+		vi.advanceTimersByTime(100);
+		expect(warmer.getState()).toEqual({ status: "warming", mode: "idle", startedAt: 1_100 });
+
+		finishWarm(result);
+		await Promise.resolve();
+		expect(warmer.getState()).toEqual({ status: "scheduled", mode: "idle", nextWarmAt: 1_200 });
+		warmer.cancel();
+
+		expect(warmer.getState()).toEqual({ status: "inactive" });
+		expect(states).toEqual(["scheduled", "warming", "scheduled", "inactive"]);
 	});
 
 	it("stops streaming mode on idle but keeps idle mode active", async () => {

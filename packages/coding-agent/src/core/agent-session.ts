@@ -54,6 +54,7 @@ import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
+import type { CacheWarmer, CacheWarmingState } from "./cache-warmer.ts";
 import {
 	type CompactionPreparation,
 	type CompactionResult,
@@ -165,6 +166,7 @@ export type AgentSessionEvent =
 	| { type: "entry_appended"; entry: SessionEntry }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
+	| { type: "cache_warming_state_change"; state: CacheWarmingState }
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
@@ -217,7 +219,7 @@ export interface AgentSessionConfig {
 	customTools?: ToolDefinition[];
 	/** Canonical model/auth runtime used by coding-agent internals. */
 	modelRuntime: ModelRuntime;
-	cacheWarmer?: { cancel(): void; onIdle(): void };
+	cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onIdle" | "subscribe">;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
@@ -373,7 +375,8 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
-	private _cacheWarmer?: { cancel(): void; onIdle(): void };
+	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onIdle" | "subscribe">;
+	private _unsubscribeCacheWarmer?: () => void;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -395,6 +398,9 @@ export class AgentSession {
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
 		this._cacheWarmer = config.cacheWarmer;
+		this._unsubscribeCacheWarmer = this._cacheWarmer?.subscribe((state) =>
+			this._emit({ type: "cache_warming_state_change", state }),
+		);
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
@@ -913,6 +919,8 @@ export class AgentSession {
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
 		this._disconnectFromAgent();
+		this._unsubscribeCacheWarmer?.();
+		this._unsubscribeCacheWarmer = undefined;
 		this._eventListeners = [];
 		this._cacheWarmer?.cancel();
 		cleanupSessionResources(this.sessionId);
@@ -925,6 +933,10 @@ export class AgentSession {
 	/** Full agent state */
 	get state(): AgentState {
 		return this.agent.state;
+	}
+
+	get cacheWarmingState(): CacheWarmingState {
+		return this._cacheWarmer?.getState() ?? { status: "inactive" };
 	}
 
 	/** Current model (may be undefined if not yet selected) */

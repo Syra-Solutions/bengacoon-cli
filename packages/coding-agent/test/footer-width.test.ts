@@ -1,8 +1,13 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
+import type { CacheWarmingState } from "../src/core/cache-warmer.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
-import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
+import {
+	FooterComponent,
+	formatCacheWarmingStatus,
+	formatCwdForFooter,
+} from "../src/modes/interactive/components/footer.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -25,6 +30,7 @@ function createSession(options: {
 	compactionUsage?: AssistantUsage;
 	toolUsage?: AssistantUsage;
 	usingSubscription?: boolean;
+	cacheWarmingState?: CacheWarmingState;
 }): AgentSession {
 	const usage = options.usage;
 	const entries: Array<Record<string, unknown>> = [];
@@ -82,6 +88,7 @@ function createSession(options: {
 		modelRuntime: {
 			isUsingSubscription: () => options.usingSubscription ?? false,
 		},
+		cacheWarmingState: options.cacheWarmingState ?? { status: "inactive" },
 	};
 
 	return session as unknown as AgentSession;
@@ -109,6 +116,19 @@ describe("formatCwdForFooter", () => {
 	it("abbreviates the home directory and descendants", () => {
 		expect(formatCwdForFooter("/home/user", "/home/user")).toBe("~");
 		expect(formatCwdForFooter("/home/user/project", "/home/user")).toBe("~/project");
+	});
+});
+
+describe("formatCacheWarmingStatus", () => {
+	it("describes scheduled and active refreshes", () => {
+		expect(formatCacheWarmingStatus({ status: "scheduled", mode: "idle", nextWarmAt: 222_000 }, 0)).toBe(
+			"Next refresh in 3m 42s",
+		);
+		expect(formatCacheWarmingStatus({ status: "scheduled", mode: "streaming", nextWarmAt: 60_000 }, 0)).toBe(
+			"Next refresh in 1m (while active)",
+		);
+		expect(formatCacheWarmingStatus({ status: "warming", mode: "idle", startedAt: 0 }, 0)).toBe("Refreshing now");
+		expect(formatCacheWarmingStatus({ status: "inactive" }, 0)).toBe("No refresh scheduled");
 	});
 });
 
@@ -205,6 +225,56 @@ describe("FooterComponent width handling", () => {
 
 		const statsLine = stripAnsi(footer.render(120)[1]);
 		expect(statsLine).toContain("CH25.0%");
+	});
+
+	it("shows cache warming immediately before context usage", () => {
+		const session = createSession({
+			sessionName: "",
+			usage: {
+				input: 100,
+				output: 10,
+				cacheRead: 50,
+				cacheWrite: 50,
+				cost: { total: 0.001 },
+			},
+			cacheWarmingState: { status: "scheduled", mode: "idle", nextWarmAt: Date.now() + 60_000 },
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+
+		const stats = stripAnsi(footer.render(120)[1]);
+		expect(stats).toContain("CH25.0%");
+		expect(stats).toContain("♨  12.3%/200k");
+	});
+
+	it("shows cache warming before cache statistics exist", () => {
+		const session = createSession({
+			sessionName: "",
+			cacheWarmingState: { status: "scheduled", mode: "idle", nextWarmAt: Date.now() + 60_000 },
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+
+		expect(stripAnsi(footer.render(120)[1])).toContain("♨  12.3%/200k");
+	});
+
+	it("pulses the cache warming indicator during a refresh", () => {
+		vi.useFakeTimers();
+		try {
+			const session = createSession({
+				sessionName: "",
+				cacheWarmingState: { status: "warming", mode: "idle", startedAt: 0 },
+			});
+			const footer = new FooterComponent(session, createFooterData(1));
+			vi.setSystemTime(0);
+			const highlighted = footer.render(120)[1];
+			vi.setSystemTime(500);
+			const dimmed = footer.render(120)[1];
+
+			expect(stripAnsi(highlighted)).toContain("♨");
+			expect(stripAnsi(dimmed)).toContain("♨");
+			expect(highlighted).not.toBe(dimmed);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("marks Kimi Coding costs as subscription estimates", () => {
