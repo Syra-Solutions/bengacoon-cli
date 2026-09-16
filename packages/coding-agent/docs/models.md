@@ -8,6 +8,7 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/ag
 - [Full Example](#full-example)
 - [Supported APIs](#supported-apis)
 - [Provider Configuration](#provider-configuration)
+- [Cache Warming](#cache-warming)
 - [Model Configuration](#model-configuration)
 - [Overriding Built-in Providers](#overriding-built-in-providers)
 - [Per-model Overrides](#per-model-overrides)
@@ -139,10 +140,37 @@ Set `api` at provider level (default for all models) or model level (override pe
 | `oauth` | Dynamic OAuth provider type. Currently supports `"radius"`; requires the gateway `baseUrl`. |
 | `headers` | Custom headers (see value resolution below) |
 | `authHeader` | Set `true` to add `Authorization: Bearer <apiKey>` automatically |
+| `cacheWarming` | Optional prompt cache warming mode and cadence; currently supported by Anthropic Messages |
 | `models` | Array of model configurations |
 | `modelOverrides` | Per-model overrides for built-in or extension-registered models on this provider |
 
 For providers with `models`, non-built-in provider configs need `baseUrl` and an `api` value at either provider or model level. `apiKey` is not required to load the file: models become available when auth is configured through `/login`/`auth.json`, CLI `--api-key`, or provider `apiKey`. If no auth is configured, the models load but stay unavailable in `/model` and `--list-models`.
+
+### Cache Warming
+
+Anthropic prompt cache warming replays the latest request as a non-streaming, zero-output-token request. Configure it on the provider:
+
+```json
+{
+  "providers": {
+    "anthropic": {
+      "cacheWarming": {
+        "mode": "streaming",
+        "refreshAfterSeconds": 240,
+        "maxDurationSeconds": 3600
+      }
+    }
+  }
+}
+```
+
+Modes:
+
+- `"off"`: no warming.
+- `"streaming"`: warm while the agent run is active, including tool execution, then stop when the agent becomes idle.
+- `"idle"`: also continue warming while Pi is idle, until the request is superseded, the session closes, or the maximum duration is reached.
+
+`refreshAfterSeconds` defaults to 240 and must be shorter than the provider cache TTL. `maxDurationSeconds` defaults to 3600. Each warm request incurs the provider's cache-read cost. Usage and cost are recorded in session totals but do not enter model context.
 
 ### Value Resolution
 

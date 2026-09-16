@@ -202,6 +202,12 @@ const ModelOverrideSchema = Type.Object({
 	compat: Type.Optional(ProviderCompatSchema),
 });
 
+const CacheWarmingSchema = Type.Object({
+	mode: Type.Union([Type.Literal("off"), Type.Literal("streaming"), Type.Literal("idle")]),
+	refreshAfterSeconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+	maxDurationSeconds: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+});
+
 const ProviderConfigSchema = Type.Object({
 	name: Type.Optional(Type.String({ minLength: 1 })),
 	baseUrl: Type.Optional(Type.String({ minLength: 1 })),
@@ -211,6 +217,7 @@ const ProviderConfigSchema = Type.Object({
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
 	authHeader: Type.Optional(Type.Boolean()),
+	cacheWarming: Type.Optional(CacheWarmingSchema),
 	models: Type.Optional(Type.Array(ModelDefinitionSchema)),
 	modelOverrides: Type.Optional(Type.Record(Type.String(), ModelOverrideSchema)),
 });
@@ -223,6 +230,12 @@ const validateModelsConfig = Compile(ModelsConfigSchema);
 export type ModelsJsonModel = Static<typeof ModelDefinitionSchema>;
 export type ModelsJsonModelOverride = Static<typeof ModelOverrideSchema>;
 export type ModelsJsonProvider = Static<typeof ProviderConfigSchema>;
+export type CacheWarmingMode = Static<typeof CacheWarmingSchema>["mode"];
+export interface ResolvedCacheWarmingSettings {
+	mode: Exclude<CacheWarmingMode, "off">;
+	refreshAfterMs: number;
+	maxDurationMs: number;
+}
 type ModelsJson = Static<typeof ModelsConfigSchema>;
 
 function formatValidationPath(error: TLocalizedValidationError): string {

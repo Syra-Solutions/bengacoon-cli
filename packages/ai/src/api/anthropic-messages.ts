@@ -1,10 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type {
+	BetaMessage,
 	BetaStopReason,
 	BetaThinkingDroppedInputTransformation,
 	BetaTool,
 	BetaCacheControlEphemeral as CacheControlEphemeral,
 	BetaContentBlockParam as ContentBlockParam,
+	MessageCreateParamsNonStreaming,
 	MessageCreateParamsStreaming,
 	BetaMessageParam as MessageParam,
 	BetaRawMessageStreamEvent as RawMessageStreamEvent,
@@ -15,6 +17,7 @@ import type {
 	Api,
 	AssistantMessage,
 	CacheRetention,
+	CacheWarmPlan,
 	ImageContent,
 	Message,
 	Model,
@@ -542,6 +545,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			let client: Anthropic;
 			let isOAuth: boolean;
 			let usageModel = model;
+			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 			let inputTransformations: BetaThinkingDroppedInputTransformation[] | undefined;
 
 			if (options?.client) {
@@ -560,7 +564,6 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					});
 				}
 
-				const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 				const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
 
 				const created = createClient(
@@ -579,6 +582,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			if (nextParams !== undefined) {
 				params = { ...(nextParams as MessageCreateParamsStreaming), stream: true };
 			}
+			const cacheWarmParams = options?.onCacheWarmPlan ? structuredClone(params) : undefined;
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
@@ -593,6 +597,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				},
 			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			if (cacheWarmParams && cacheRetention !== "none") {
+				options?.onCacheWarmPlan?.(createCacheWarmPlan(client, cacheWarmParams, model, options));
+			}
 			stream.push({ type: "start", partial: output });
 
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
@@ -604,13 +611,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					const transformations = event.message.input_transformations;
 					if (Array.isArray(transformations)) inputTransformations = transformations;
 					output.model = event.message.model;
-					const fallbackCost =
-						output.model === model.id
-							? undefined
-							: model.compat?.allowedFallbackModels?.find(
-									(fallback) => fallback.provider === model.provider && fallback.model === output.model,
-								)?.cost;
-					usageModel = fallbackCost ? { ...model, id: output.model, cost: fallbackCost } : model;
+					usageModel = getUsageModel(model, output.model);
 					// Capture initial token usage from message_start event
 					// This ensures we have input token counts even if the stream is aborted early
 					output.usage.input = event.message.usage.input_tokens || 0;
@@ -1029,6 +1030,50 @@ function getBetaFeatures(
 	}
 	if (nativeToolChanges) features.push(MID_CONVERSATION_TOOL_CHANGES_BETA);
 	return [...new Set(features)];
+}
+
+function getUsageModel(model: Model<"anthropic-messages">, responseModel: string): Model<"anthropic-messages"> {
+	if (responseModel === model.id) return model;
+	const fallbackCost = model.compat?.allowedFallbackModels?.find(
+		(fallback) => fallback.provider === model.provider && fallback.model === responseModel,
+	)?.cost;
+	return fallbackCost ? { ...model, id: responseModel, cost: fallbackCost } : model;
+}
+
+function createCacheWarmPlan(
+	client: Anthropic,
+	params: MessageCreateParamsStreaming,
+	model: Model<"anthropic-messages">,
+	options?: AnthropicOptions,
+): CacheWarmPlan {
+	const { stream: _stream, ...baseParams } = params;
+	const ttlMs =
+		getCacheControl(model, options?.cacheRetention, options?.env).cacheControl?.ttl === "1h" ? 3_600_000 : 300_000;
+	return {
+		ttlMs,
+		warm: async (signal) => {
+			const response: BetaMessage = await client.beta.messages.create(
+				{ ...baseParams, max_tokens: 0, stream: false } as MessageCreateParamsNonStreaming,
+				{
+					signal,
+					...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+					maxRetries: 0,
+				},
+			);
+			const usage = {
+				input: response.usage.input_tokens || 0,
+				output: response.usage.output_tokens || 0,
+				cacheRead: response.usage.cache_read_input_tokens || 0,
+				cacheWrite: response.usage.cache_creation_input_tokens || 0,
+				cacheWrite1h: response.usage.cache_creation?.ephemeral_1h_input_tokens || 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			};
+			usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+			calculateCost(getUsageModel(model, response.model), usage);
+			return { provider: model.provider, model: response.model, usage };
+		},
+	};
 }
 
 function buildParams(

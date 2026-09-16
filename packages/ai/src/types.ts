@@ -120,6 +120,17 @@ export interface ProviderResponse {
 	headers: Record<string, string>;
 }
 
+export interface CacheWarmResult {
+	provider: string;
+	model: string;
+	usage: Usage;
+}
+
+export interface CacheWarmPlan {
+	ttlMs: number;
+	warm: (signal: AbortSignal) => Promise<CacheWarmResult>;
+}
+
 /** Authentication, HTTP transport, and lifecycle callbacks shared by provider requests. */
 export interface ProviderRequestOptions<TModel = Model<Api>> {
 	signal?: AbortSignal;
@@ -143,6 +154,8 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 	 * Return undefined to keep the payload unchanged.
 	 */
 	onPayload?: (payload: unknown, model: TModel) => unknown | undefined | Promise<unknown | undefined>;
+	/** Receives an operation that refreshes this request's prompt cache. */
+	onCacheWarmPlan?: (plan: CacheWarmPlan) => void;
 	/**
 	 * Optional callback invoked after an HTTP response is received.
 	 */

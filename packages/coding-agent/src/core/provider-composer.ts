@@ -196,10 +196,11 @@ function applyModelsJson(
 		!hasOverrides &&
 		!config.apiKey &&
 		!config.oauth &&
+		!config.cacheWarming &&
 		config.authHeader === undefined
 	) {
 		throw new Error(
-			`Provider ${providerId}: must specify "baseUrl", "headers", "compat", "modelOverrides", or "models".`,
+			`Provider ${providerId}: must specify "baseUrl", "headers", "compat", "cacheWarming", "modelOverrides", or "models".`,
 		);
 	}
 

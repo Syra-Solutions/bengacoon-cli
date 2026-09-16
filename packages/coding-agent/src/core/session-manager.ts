@@ -73,6 +73,13 @@ export interface ModelChangeEntry extends SessionEntryBase {
 	modelId: string;
 }
 
+export interface CacheWarmEntry extends SessionEntryBase {
+	type: "cache_warm";
+	provider: string;
+	model: string;
+	usage: Usage;
+}
+
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
 	type: "compaction";
 	summary: string;
@@ -154,6 +161,7 @@ export type SessionEntry =
 	| SessionMessageEntry
 	| ThinkingLevelChangeEntry
 	| ModelChangeEntry
+	| CacheWarmEntry
 	| CompactionEntry
 	| BranchSummaryEntry
 	| CustomEntry
@@ -1113,6 +1121,20 @@ export class SessionManager {
 			timestamp: new Date().toISOString(),
 			provider,
 			modelId,
+		};
+		this._appendEntry(entry);
+		return entry.id;
+	}
+
+	appendCacheWarm(provider: string, model: string, usage: Usage): string {
+		const entry: CacheWarmEntry = {
+			type: "cache_warm",
+			id: generateId(this.byId),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			provider,
+			model,
+			usage,
 		};
 		this._appendEntry(entry);
 		return entry.id;
