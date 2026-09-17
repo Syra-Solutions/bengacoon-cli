@@ -8,15 +8,25 @@ import {
 } from "@earendil-works/pi-ai";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AuthStorage } from "../src/core/auth-storage.ts";
 import {
+	CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS,
 	CacheWarmer,
+	type CacheWarmingAction,
 	type CacheWarmingDecisionEvent,
-	type CacheWarmingState,
+	type CacheWarmingNotice,
 	type CacheWarmRequest,
 	getCacheWarmingDelayMs,
 	getPromptCacheTtlMs,
 	isReplayable,
 } from "../src/core/cache-warmer.ts";
+import { createEventBus } from "../src/core/event-bus.ts";
+import { createExtensionRuntime, loadExtensionFromFactory } from "../src/core/extensions/loader.ts";
+import { ExtensionRunner } from "../src/core/extensions/runner.ts";
+import type { ExtensionFactory } from "../src/core/extensions/types.ts";
+import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
+import type { CacheWarmingMode } from "../src/core/settings-manager.ts";
+import { createInMemoryModelRegistry } from "./model-runtime-test-utils.ts";
 
 const adaptiveModel: Model<Api> = {
 	...getBuiltinModel("anthropic", "claude-opus-4-6"),
@@ -52,31 +62,68 @@ function response(model: Model<Api>, stopReason: AssistantMessage["stopReason"] 
 	};
 }
 
+/** A branch ending in an assistant response whose prompt had `promptTokens` tokens. */
+function branchWithPrompt(promptTokens: number): SessionEntry[] {
+	const entries: SessionEntry[] = [];
+	const assistant: AssistantMessage = {
+		...response(adaptiveModel),
+		usage: {
+			input: 0,
+			output: 10,
+			cacheRead: promptTokens,
+			cacheWrite: 0,
+			totalTokens: promptTokens + 10,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+	};
+	entries.push({
+		type: "message",
+		id: "a",
+		parentId: entries.at(-1)?.id ?? null,
+		timestamp: new Date(0).toISOString(),
+		message: assistant,
+	});
+	return entries;
+}
+
 /** Fake runtime and session manager. `result` produces the response of each warm request. */
 function fakeRuntime(
-	result: (model: Model<Api>) => Promise<AssistantMessage> = async (model) => response(model),
-	decide: (event: CacheWarmingDecisionEvent) => "warm" | "stop" | Promise<"warm" | "stop"> = () => "warm",
+	options: {
+		result?: (model: Model<Api>) => Promise<AssistantMessage>;
+		decide?: (event: CacheWarmingDecisionEvent) => CacheWarmingAction;
+		mode?: CacheWarmingMode;
+		branch?: SessionEntry[];
+		hasDecisionHandler?: boolean;
+	} = {},
 ) {
 	const calls: Array<{ model: Model<Api>; options: ModelsSimpleStreamOptions | undefined }> = [];
+	const events: CacheWarmingDecisionEvent[] = [];
 	const appendUsage = vi.fn();
+	const state = { mode: options.mode ?? "idle", branch: options.branch ?? branchWithPrompt(100_000) };
 	const warmer = new CacheWarmer(
 		{
-			streamSimple: (model, _context, options) => {
-				calls.push({ model, options });
+			streamSimple: (model, _context, streamOptions) => {
+				calls.push({ model, options: streamOptions });
+				const result = options.result ?? (async (m: Model<Api>) => response(m));
 				return { result: () => result(model) } as unknown as AssistantMessageEventStream;
 			},
 		},
-		{ appendUsage },
-		decide,
+		{ appendUsage, getBranch: () => state.branch },
+		() => state.mode,
+		async (event) => {
+			events.push(event);
+			return options.decide?.(event) ?? event.action;
+		},
+		() => options.hasDecisionHandler ?? false,
 	);
-	return { warmer, calls, appendUsage };
+	return { warmer, calls, events, appendUsage, state };
 }
 
 function request(model: Model<Api> = adaptiveModel, options: ModelsSimpleStreamOptions = {}): CacheWarmRequest {
 	return { model, context: normalizeContext({ messages: [] }), options };
 }
 
-const idle = { mode: "idle" } as const;
+const current = () => true;
 
 afterEach(() => vi.useRealTimers());
 
@@ -118,7 +165,7 @@ describe("CacheWarmer", () => {
 		const signal = new AbortController().signal;
 		const transformHeaders = async () => ({});
 
-		warmer.start(request(adaptiveModel, { reasoning: "high", signal, sessionId: "s", transformHeaders }), idle);
+		warmer.start(request(adaptiveModel, { reasoning: "high", signal, sessionId: "s", transformHeaders }), current);
 		await vi.advanceTimersByTimeAsync(270_000);
 
 		expect(calls).toHaveLength(1);
@@ -136,113 +183,200 @@ describe("CacheWarmer", () => {
 			adaptiveModel.provider,
 			adaptiveModel.id,
 			response(adaptiveModel).usage,
+			undefined,
 		);
 
 		await vi.advanceTimersByTimeAsync(270_000);
 		expect(calls).toHaveLength(2);
 	});
 
-	it("exposes cost inputs to policy without prompt contents", async () => {
+	it("restores timing and accumulated cost from persisted warming usage", async () => {
 		vi.useFakeTimers();
-		let candidate: CacheWarmingDecisionEvent | undefined;
-		const { warmer, calls } = fakeRuntime(undefined, (event) => {
-			candidate = event;
-			return "stop";
+		vi.setSystemTime(280_000);
+		// Idle refreshes only clear the savings reserve on a large prefix at a 15% continuation estimate.
+		const branch = branchWithPrompt(400_000);
+		branch.push({
+			type: "usage",
+			id: "w",
+			parentId: "a",
+			timestamp: new Date(20_000).toISOString(),
+			kind: "cache_warm",
+			provider: adaptiveModel.provider,
+			model: adaptiveModel.id,
+			usage: response(adaptiveModel).usage,
+		});
+		const { warmer, calls } = fakeRuntime({ branch });
+
+		warmer.start(request(), current, { lastActivityAt: 20_000, startedAt: 0 });
+		expect(warmer.status).toMatchObject({
+			state: "scheduled",
+			nextWarmAt: 290_000,
+			evaluation: { phase: "idle", spentCost: 0.01, continuationProbability: 0.15 },
 		});
 
-		warmer.start(request(), idle);
-		warmer.recordRequestUsage({
-			input: 10_000,
-			output: 10,
-			cacheRead: 90_000,
-			cacheWrite: 0,
-			totalTokens: 100_010,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		});
+		await vi.advanceTimersByTimeAsync(9_999);
+		expect(calls).toHaveLength(0);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(calls).toHaveLength(1);
+	});
+
+	it("prices the decision from the last real request without exposing prompt contents", async () => {
+		vi.useFakeTimers();
+		const { warmer, events } = fakeRuntime({ decide: () => "stop" });
+
+		warmer.start(request(), current);
 		await vi.advanceTimersByTimeAsync(270_000);
 
-		expect(calls).toHaveLength(0);
-		expect(candidate).toMatchObject({
-			profile: "idle",
+		expect(events).toHaveLength(1);
+		const event = events[0];
+		expect(event).toMatchObject({
+			type: "cache_warming_decision",
+			mode: "idle",
 			phase: "streaming",
+			model: { provider: "anthropic", id: "claude-opus-4-6" },
+			ttlMs: 300_000,
 			promptTokens: 100_000,
-			cumulativeWarmCost: 0,
-			defaultAction: "stop",
+			spentCost: 0,
+			continuationProbability: 1,
+			action: "warm",
 		});
-		expect(candidate?.costs.cacheMiss).toBeGreaterThan(candidate?.costs.cacheHit ?? 0);
-		expect(candidate).not.toHaveProperty("context");
+		// 100k tokens on Opus: cache read $0.05, cache write $0.625, one output token $0.000025.
+		expect(event.missCost).toBeCloseTo(0.575);
+		expect(event.warmCost).toBeCloseTo(0.050025);
+		expect(event).not.toHaveProperty("context");
+	});
+
+	it("stops when a refresh cannot clear the savings reserve", async () => {
+		vi.useFakeTimers();
+		const { warmer, calls, events } = fakeRuntime({ branch: branchWithPrompt(5_000) });
+
+		warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(270_000);
+
+		expect(events[0].missCost - events[0].warmCost).toBeLessThan(CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS);
+		expect(events[0].action).toBe("stop");
+		expect(calls).toHaveLength(0);
+		expect(warmer.status.state).toBe("stopped");
+	});
+
+	it("lets the decision handler override pi's action and reports the override", async () => {
+		vi.useFakeTimers();
+		const notices: CacheWarmingNotice[] = [];
+		const { warmer, calls } = fakeRuntime({
+			branch: branchWithPrompt(5_000),
+			decide: () => "warm",
+			hasDecisionHandler: true,
+		});
+		warmer.onChange = (notice) => {
+			if (notice) notices.push(notice);
+		};
+
+		warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(calls).toHaveLength(1);
+		expect(notices).toEqual([{ usage: response(adaptiveModel).usage, note: "extension override" }]);
+	});
+
+	it("stops silently when cache economics are unavailable", async () => {
+		vi.useFakeTimers();
+		const notices: CacheWarmingNotice[] = [];
+		const { warmer } = fakeRuntime({ branch: branchWithPrompt(0) });
+		warmer.onChange = (notice) => {
+			if (notice) notices.push(notice);
+		};
+
+		warmer.start(request(), current);
+		expect(warmer.status).toMatchObject({ state: "inactive", reason: "cache economics unavailable" });
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(notices).toEqual([]);
 	});
 
 	it("does nothing when warming is off, the TTL is unknown, or the request cannot be replayed", async () => {
 		vi.useFakeTimers();
-		const { warmer, calls } = fakeRuntime();
+		const { warmer, calls, state } = fakeRuntime();
 
-		warmer.start(request(), { mode: "off" });
-		warmer.start(request(unknownModel), idle);
-		warmer.start(request(budgetModel, { reasoning: "high" }), idle);
+		state.mode = "off";
+		warmer.start(request(), current);
+		state.mode = "idle";
+		warmer.start(request(unknownModel), current);
+		warmer.start(request(budgetModel, { reasoning: "high" }), current);
 		await vi.advanceTimersByTimeAsync(600_000);
 
 		expect(calls).toHaveLength(0);
-		expect(warmer.getState()).toEqual({ status: "inactive" });
+		expect(warmer.status.state).toBe("inactive");
 	});
 
-	it("stops at the fixed one-hour safety cap", async () => {
+	it("stops at the next tick when the context changed or warming was turned off", async () => {
 		vi.useFakeTimers();
-		const { warmer, calls } = fakeRuntime();
+		const { warmer, calls, state } = fakeRuntime();
 
-		warmer.start(request(adaptiveModel, { cacheRetention: "long" }), idle);
+		let stillCurrent = true;
+		warmer.start(request(), () => stillCurrent);
+		expect(warmer.status.state).toBe("scheduled");
+		stillCurrent = false;
+		expect(warmer.status.state).toBe("inactive");
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(calls).toHaveLength(0);
+
+		warmer.start(request(), current);
+		state.mode = "off";
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(calls).toHaveLength(0);
+		expect(warmer.status.state).toBe("inactive");
+	});
+
+	it("uses separate one-hour streaming and 30-minute idle safety caps", async () => {
+		vi.useFakeTimers();
+		const { warmer, calls } = fakeRuntime({ branch: branchWithPrompt(400_000) });
+
+		warmer.start(request(adaptiveModel, { cacheRetention: "long" }), current);
 		await vi.advanceTimersByTimeAsync(3_600_000);
 		expect(calls).toHaveLength(1);
-		expect(warmer.getState()).toEqual({ status: "inactive" });
+		expect(warmer.status.state).toBe("inactive");
 
-		warmer.start(request(openaiModel, { cacheRetention: "long" }), idle);
-		await vi.advanceTimersByTimeAsync(86_400_000);
-		expect(calls).toHaveLength(1);
+		warmer.start(request(), current);
+		warmer.onAgentSettled();
+		await vi.advanceTimersByTimeAsync(1_800_000);
+		expect(calls).toHaveLength(7);
+		expect(warmer.status.state).toBe("inactive");
 	});
 
 	it("does not record failed or aborted warm requests", async () => {
 		vi.useFakeTimers();
-		const { warmer, appendUsage } = fakeRuntime(async (model) => response(model, "error"));
+		const { warmer, appendUsage } = fakeRuntime({ result: async (model) => response(model, "error") });
 
-		warmer.start(request(), idle);
+		warmer.start(request(), current);
 		await vi.advanceTimersByTimeAsync(270_000);
 
 		expect(appendUsage).not.toHaveBeenCalled();
-		expect(warmer.getState().status).toBe("scheduled");
+		expect(warmer.status.state).toBe("scheduled");
 	});
 
 	it("includes accumulated warming cost in later decisions", async () => {
 		vi.useFakeTimers();
-		const candidates: CacheWarmingDecisionEvent[] = [];
-		const { warmer } = fakeRuntime(undefined, (event) => {
-			candidates.push(event);
-			return "warm";
-		});
+		const { warmer, events } = fakeRuntime();
 
-		warmer.start(request(), idle);
+		warmer.start(request(), current);
 		await vi.advanceTimersByTimeAsync(540_000);
 
-		expect(candidates).toHaveLength(2);
-		expect(candidates[0].cumulativeWarmCost).toBe(0);
-		expect(candidates[1].cumulativeWarmCost).toBe(0.01);
+		expect(events.map((event) => event.spentCost)).toEqual([0, 0.01]);
 	});
 
 	it("replaces the previous run and aborts its in-flight warm request", async () => {
 		vi.useFakeTimers();
 		let release!: () => void;
-		const { warmer, calls } = fakeRuntime(
-			(model) =>
+		const { warmer, calls } = fakeRuntime({
+			result: (model) =>
 				new Promise((resolve) => {
 					release = () => resolve(response(model));
 				}),
-		);
+		});
 
-		warmer.start(request(), idle);
+		warmer.start(request(), current);
 		await vi.advanceTimersByTimeAsync(270_000);
 		expect(calls).toHaveLength(1);
-		expect(warmer.getState().status).toBe("warming");
 
-		warmer.start(request(), idle);
+		warmer.start(request(), current);
 		expect(calls[0].options?.signal?.aborted).toBe(true);
 		release();
 		warmer.cancel();
@@ -250,47 +384,91 @@ describe("CacheWarmer", () => {
 		expect(calls).toHaveLength(1);
 	});
 
-	it("stops on agent settled only in streaming mode", async () => {
+	it("stops on agent settled in streaming mode and lowers the odds in idle mode", async () => {
 		vi.useFakeTimers();
-		const { warmer, calls } = fakeRuntime();
+		const { warmer, calls, events, state } = fakeRuntime({ mode: "streaming", branch: branchWithPrompt(400_000) });
 
-		warmer.start(request(), { mode: "streaming" });
+		warmer.start(request(), current);
 		warmer.onAgentSettled();
 		await vi.advanceTimersByTimeAsync(540_000);
 		expect(calls).toHaveLength(0);
 
-		warmer.start(request(), idle);
+		state.mode = "idle";
+		warmer.start(request(), current);
 		warmer.onAgentSettled();
 		await vi.advanceTimersByTimeAsync(540_000);
 		expect(calls).toHaveLength(2);
+		expect(events.map((event) => [event.phase, event.continuationProbability])).toEqual([
+			["idle", 0.15],
+			["idle", 0.15],
+		]);
 	});
 
-	it("reports scheduled, warming, and inactive states to subscribers", async () => {
+	it("stops idle warming when the continuation estimate cannot pay for the refresh", async () => {
+		vi.useFakeTimers();
+		const { warmer, calls, events } = fakeRuntime({ branch: branchWithPrompt(100_000) });
+
+		warmer.start(request(), current);
+		warmer.onAgentSettled();
+		await vi.advanceTimersByTimeAsync(270_000);
+
+		expect(events[0]).toMatchObject({ phase: "idle", continuationProbability: 0.15, action: "stop" });
+		expect(calls).toHaveLength(0);
+		expect(warmer.status.state).toBe("stopped");
+	});
+
+	it("reports schedule changes", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
-		const states: CacheWarmingState[] = [];
+		const seen: Array<number | undefined> = [];
 		const { warmer } = fakeRuntime();
-		warmer.subscribe((state) => states.push(state));
+		warmer.onChange = () => seen.push(warmer.status.nextWarmAt);
 
-		warmer.start(request(), idle);
-		expect(warmer.getState()).toEqual({ status: "scheduled", mode: "idle", scheduledAt: 0, nextWarmAt: 270_000 });
-		await vi.advanceTimersByTimeAsync(540_000);
-		expect(states.map((state) => state.status)).toEqual([
-			"scheduled",
-			"warming",
-			"scheduled",
-			"warming",
-			"scheduled",
-		]);
-		expect(states[1]).toEqual({ status: "warming", mode: "idle", startedAt: 270_000 });
-		expect(states[2]).toEqual({
-			status: "scheduled",
-			mode: "idle",
-			scheduledAt: 270_000,
-			nextWarmAt: 540_000,
-			warmedAt: 270_000,
-		});
+		warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(270_000);
 		warmer.cancel();
-		expect(states.at(-1)).toEqual({ status: "inactive" });
+		expect(seen).toEqual([270_000, 540_000, undefined]);
+	});
+});
+
+describe("ExtensionRunner.emitCacheWarmingDecision", () => {
+	it("returns pi's action unless a handler overrides it, last override wins", async () => {
+		const runtime = createExtensionRuntime();
+		const eventBus = createEventBus();
+		const seen: CacheWarmingAction[] = [];
+		const factories: ExtensionFactory[] = [
+			(pi) =>
+				pi.on("cache_warming_decision", (event) => {
+					seen.push(event.action);
+					return { action: "warm" };
+				}),
+			(pi) => pi.on("cache_warming_decision", () => ({ action: "stop" })),
+			(pi) => pi.on("cache_warming_decision", () => undefined),
+		];
+		const extensions = [];
+		for (const factory of factories) {
+			extensions.push(await loadExtensionFromFactory(factory, process.cwd(), eventBus, runtime));
+		}
+		const modelRegistry = await createInMemoryModelRegistry(AuthStorage.inMemory());
+		const event: CacheWarmingDecisionEvent = {
+			type: "cache_warming_decision",
+			mode: "idle",
+			phase: "idle",
+			model: { provider: "test", id: "model" },
+			ttlMs: 300_000,
+			promptTokens: 100_000,
+			warmCost: 0.05,
+			missCost: 0.5,
+			spentCost: 0,
+			continuationProbability: 0.15,
+			action: "warm",
+		};
+
+		const empty = new ExtensionRunner([], runtime, process.cwd(), SessionManager.inMemory(), modelRegistry);
+		expect(await empty.emitCacheWarmingDecision(event)).toBe("warm");
+
+		const runner = new ExtensionRunner(extensions, runtime, process.cwd(), SessionManager.inMemory(), modelRegistry);
+		expect(await runner.emitCacheWarmingDecision(event)).toBe("stop");
+		expect(seen).toEqual(["warm"]);
 	});
 });

@@ -54,7 +54,7 @@ import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
-import type { CacheWarmer, CacheWarmingState } from "./cache-warmer.ts";
+import type { CacheWarmer, CacheWarmingNotice, CacheWarmingStatus } from "./cache-warmer.ts";
 import {
 	type CompactionPreparation,
 	type CompactionResult,
@@ -166,7 +166,7 @@ export type AgentSessionEvent =
 	| { type: "entry_appended"; entry: SessionEntry }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
-	| { type: "cache_warming_state_change"; state: CacheWarmingState }
+	| { type: "cache_warming_changed"; notice?: CacheWarmingNotice }
 	| {
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
@@ -219,8 +219,8 @@ export interface AgentSessionConfig {
 	customTools?: ToolDefinition[];
 	/** Canonical model/auth runtime used by coding-agent internals. */
 	modelRuntime: ModelRuntime;
-	/** Cancelled whenever the session's context changes so a stale prompt cache is not kept warm. */
-	cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onAgentSettled" | "recordRequestUsage" | "subscribe">;
+	/** Keeps the prompt cache entry of the last session request warm. */
+	cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onChange">;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
@@ -376,11 +376,7 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
-	private _cacheWarmer?: Pick<
-		CacheWarmer,
-		"cancel" | "getState" | "onAgentSettled" | "recordRequestUsage" | "subscribe"
-	>;
-	private _unsubscribeCacheWarmer?: () => void;
+	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onChange">;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -402,9 +398,9 @@ export class AgentSession {
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
 		this._cacheWarmer = config.cacheWarmer;
-		this._unsubscribeCacheWarmer = this._cacheWarmer?.subscribe((state) =>
-			this._emit({ type: "cache_warming_state_change", state }),
-		);
+		if (this._cacheWarmer) {
+			this._cacheWarmer.onChange = (notice) => this._emit({ type: "cache_warming_changed", notice });
+		}
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._allowedToolNames = config.allowedToolNames ? new Set(config.allowedToolNames) : undefined;
@@ -725,7 +721,6 @@ export class AgentSession {
 				this._lastAssistantMessage = event.message;
 
 				const assistantMsg = event.message as AssistantMessage;
-				this._cacheWarmer?.recordRequestUsage(assistantMsg.usage);
 				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
 					this._overflowRecoveryAttempted = false;
 				}
@@ -925,9 +920,10 @@ export class AgentSession {
 		);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
-		this._unsubscribeCacheWarmer?.();
-		this._unsubscribeCacheWarmer = undefined;
-		this._cacheWarmer?.cancel();
+		if (this._cacheWarmer) {
+			this._cacheWarmer.onChange = undefined;
+			this._cacheWarmer.cancel();
+		}
 		cleanupSessionResources(this.sessionId);
 	}
 
@@ -940,8 +936,9 @@ export class AgentSession {
 		return this.agent.state;
 	}
 
-	get cacheWarmingState(): CacheWarmingState {
-		return this._cacheWarmer?.getState() ?? { status: "inactive" };
+	/** Current cache-warming state and the policy inputs that produced it. */
+	get cacheWarmingStatus(): CacheWarmingStatus | undefined {
+		return this._cacheWarmer?.status;
 	}
 
 	/** Current model (may be undefined if not yet selected) */
@@ -1746,7 +1743,6 @@ export class AgentSession {
 
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(model);
-		this._cacheWarmer?.cancel();
 		this.agent.state.model = model;
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		if (options.persist) {
@@ -1814,7 +1810,6 @@ export class AgentSession {
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.model, next.thinkingLevel);
 
 		// Apply model
-		this._cacheWarmer?.cancel();
 		this.agent.state.model = next.model;
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		if (options.persist) {
@@ -1850,7 +1845,6 @@ export class AgentSession {
 		const nextModel = availableModels[nextIndex];
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(nextModel);
-		this._cacheWarmer?.cancel();
 		this.agent.state.model = nextModel;
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		if (options.persist) {
@@ -2117,7 +2111,6 @@ export class AgentSession {
 			}
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
-			this._cacheWarmer?.cancel();
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
@@ -2444,7 +2437,6 @@ export class AgentSession {
 			}
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
-			this._cacheWarmer?.cancel();
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
@@ -2911,7 +2903,6 @@ export class AgentSession {
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 		oldRunner.invalidate();
 		await this.settingsManager.reload();
-		this._cacheWarmer?.cancel();
 		this.syncQueueModesFromSettings();
 		resetApiProviders();
 		await this._resourceLoader.reload();
@@ -3136,13 +3127,6 @@ export class AgentSession {
 	}
 
 	/**
-	 * Stop keeping the current prompt cache warm. The next request restarts warming if enabled.
-	 */
-	stopCacheWarming(): void {
-		this._cacheWarmer?.cancel();
-	}
-
-	/**
 	 * Cancel running bash command.
 	 */
 	abortBash(): void {
@@ -3355,7 +3339,6 @@ export class AgentSession {
 
 			// Switch leaf (with or without summary)
 			// Summary is attached at the navigation target position (newLeafId), not the old branch
-			this._cacheWarmer?.cancel();
 			let summaryEntry: BranchSummaryEntry | undefined;
 			if (summaryText) {
 				// Create summary at target position (can be null for root)

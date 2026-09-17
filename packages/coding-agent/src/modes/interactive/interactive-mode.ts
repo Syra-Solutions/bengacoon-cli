@@ -64,6 +64,7 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
+import type { CacheWarmingNotice } from "../../core/cache-warmer.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -126,9 +127,8 @@ import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
 import {
-	CACHE_WARMING_SPIN_FRAME_MS,
-	cacheWarmingSpinStart,
 	FooterComponent,
+	formatCacheWarmingNotice,
 	formatCacheWarmingStatus,
 	formatTokens,
 } from "./components/footer.ts";
@@ -236,7 +236,12 @@ type CompactionCostNotice = {
 	usage: Usage;
 };
 
-type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" }> | CompactionCostNotice;
+type CacheWarmUsageEntry = Extract<SessionEntry, { type: "usage" }>;
+type RenderSessionItem =
+	| AgentMessage
+	| Extract<SessionEntry, { type: "custom" }>
+	| CacheWarmUsageEntry
+	| CompactionCostNotice;
 
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
@@ -244,6 +249,10 @@ function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionE
 
 function isCompactionCostNotice(item: RenderSessionItem): item is CompactionCostNotice {
 	return "type" in item && item.type === "compaction_cost";
+}
+
+function isCacheWarmUsageEntry(item: RenderSessionItem): item is CacheWarmUsageEntry {
+	return "type" in item && item.type === "usage";
 }
 
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
@@ -452,7 +461,6 @@ export class InteractiveMode {
 
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
-	private cacheWarmingAnimationTimer?: ReturnType<typeof setTimeout>;
 	private signalCleanupHandlers: Array<() => void> = [];
 
 	// Track if editor is in bash mode (text starts with !)
@@ -1952,7 +1960,6 @@ export class InteractiveMode {
 		}
 		this.footer.setSession(this.session);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
-		this.updateCacheWarmingAnimation();
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.outputPad = this.settingsManager.getOutputPad();
@@ -3170,35 +3177,6 @@ export class InteractiveMode {
 		});
 	}
 
-	/**
-	 * Re-render the footer indicator on its own clock: every frame while the
-	 * spinner runs, then once per quarter of the countdown until the next refresh.
-	 */
-	private updateCacheWarmingAnimation(): void {
-		if (this.cacheWarmingAnimationTimer !== undefined) {
-			clearTimeout(this.cacheWarmingAnimationTimer);
-			this.cacheWarmingAnimationTimer = undefined;
-		}
-		const state = this.session.cacheWarmingState;
-		const now = Date.now();
-		const spinStart = cacheWarmingSpinStart(state, now);
-		let delay: number | undefined;
-		if (spinStart !== undefined) {
-			delay = CACHE_WARMING_SPIN_FRAME_MS;
-		} else if (state.status === "scheduled") {
-			const quarter = Math.max(1, (state.nextWarmAt - state.scheduledAt) / 4);
-			delay = quarter - ((now - state.scheduledAt) % quarter);
-		}
-		if (delay !== undefined) {
-			this.cacheWarmingAnimationTimer = setTimeout(
-				() => this.updateCacheWarmingAnimation(),
-				Math.max(CACHE_WARMING_SPIN_FRAME_MS, delay),
-			);
-			this.cacheWarmingAnimationTimer.unref?.();
-		}
-		this.ui.requestRender();
-	}
-
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.isInitialized) {
 			await this.init();
@@ -3236,8 +3214,9 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 
-			case "cache_warming_state_change":
-				this.updateCacheWarmingAnimation();
+			case "cache_warming_changed":
+				if (event.notice) this.addCacheWarmingNotice(event.notice);
+				this.ui.requestRender();
 				break;
 
 			case "entry_appended":
@@ -3732,8 +3711,8 @@ export class InteractiveMode {
 	): void {
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
-		// Cache-miss notices are not persisted; re-derive them from the full entry
-		// list and re-inject them after the assistant messages that paid for them.
+		// Cache misses are not persisted, unlike successful cache-warming usage.
+		// Re-derive them and inject them after the assistant messages that paid for them.
 		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
 			? collectCacheMisses(this.sessionManager.getEntries(), this.session.modelRuntime)
 			: new Map<AssistantMessage, CacheMiss>();
@@ -3746,6 +3725,10 @@ export class InteractiveMode {
 		for (const item of items) {
 			if (isCustomSessionEntry(item)) {
 				this.addCustomEntryToChat(item);
+				continue;
+			}
+			if (isCacheWarmUsageEntry(item)) {
+				this.addCacheWarmingNotice(item);
 				continue;
 			}
 			if (isCompactionCostNotice(item)) {
@@ -3827,7 +3810,7 @@ export class InteractiveMode {
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
 		const items = entries.flatMap((entry): RenderSessionItem[] => {
-			if (entry.type === "custom") {
+			if (entry.type === "custom" || (entry.type === "usage" && entry.kind === "cache_warm")) {
 				return [entry];
 			}
 			const messages = sessionEntryToContextMessages(entry);
@@ -3843,6 +3826,12 @@ export class InteractiveMode {
 	 * Render billing usage for a compaction or branch summary. The notice is derived
 	 * from persisted summary usage and is not stored as a separate session entry.
 	 */
+	private addCacheWarmingNotice(notice: CacheWarmingNotice): void {
+		if (!this.settingsManager.getShowCacheMissNotices()) return;
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(theme.fg("dim", formatCacheWarmingNotice(notice)), 1, 0));
+	}
+
 	private addCompactionCostNotice(notice: CompactionCostNotice): void {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
 
@@ -4600,7 +4589,6 @@ export class InteractiveMode {
 			const defaultProvider = this.settingsManager.getDefaultProvider();
 			const defaultModelId = this.settingsManager.getDefaultModel();
 			const defaultModel = defaultProvider && defaultModelId ? `${defaultProvider}/${defaultModelId}` : "not set";
-			const cacheWarming = this.settingsManager.getCacheWarming();
 			selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
@@ -4616,7 +4604,7 @@ export class InteractiveMode {
 					followUpMode: this.session.followUpMode,
 					transport: this.settingsManager.getTransport(),
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
-					cacheWarmingMode: cacheWarming.mode,
+					cacheWarmingMode: this.settingsManager.getCacheWarmingMode(),
 					thinkingLevel: this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
 					availableThinkingLevels: [...THINKING_LEVEL_OPTIONS],
 					modelThinkingLevels: this.settingsManager.getAllModelThinkingLevels(),
@@ -4692,7 +4680,6 @@ export class InteractiveMode {
 					},
 					onCacheWarmingModeChange: (mode) => {
 						this.settingsManager.setCacheWarmingMode(mode);
-						if (mode === "off") this.session.stopCacheWarming();
 						this.showStatus(`Cache warming: ${mode}`);
 					},
 					onModelThinkingLevelChange: (provider, modelId, level) => {
@@ -6304,11 +6291,23 @@ export class InteractiveMode {
 		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
 		info += `${theme.fg("dim", "Total:")} ${stats.tokens.total.toLocaleString()}\n`;
 
-		const cacheWarming = this.settingsManager.getCacheWarming();
-		if (cacheWarming.mode !== "off") {
-			info += `\n${theme.bold("Cache Warming")}\n`;
-			info += `${theme.fg("dim", "Mode:")} ${cacheWarming.mode}\n`;
-			info += `${theme.fg("dim", "Status:")} ${formatCacheWarmingStatus(this.session.cacheWarmingState)}\n`;
+		const cacheWarmingMode = this.settingsManager.getCacheWarmingMode();
+		const cacheWarmingStatus = this.session.cacheWarmingStatus;
+		const modeDescription =
+			cacheWarmingMode === "streaming"
+				? " (during agent runs only)"
+				: cacheWarmingMode === "idle"
+					? " (also between runs while continuation stays profitable)"
+					: "";
+		info += `\n${theme.bold("Cache Warming")}\n`;
+		info += `${theme.fg("dim", "Mode:")} ${cacheWarmingMode}${modeDescription}\n`;
+		info += `${theme.fg("dim", "Status:")} ${cacheWarmingStatus ? formatCacheWarmingStatus(cacheWarmingStatus) : "Inactive (cache warming unavailable)"}\n`;
+		if (cacheWarmingStatus?.evaluation?.economicsAvailable) {
+			info += `${theme.fg("dim", "Cache miss penalty:")} $${cacheWarmingStatus.evaluation.missCost.toFixed(3)}\n`;
+			info += `${theme.fg("dim", "Refresh cost:")} $${cacheWarmingStatus.evaluation.warmCost.toFixed(3)}\n`;
+			if (cacheWarmingStatus.evaluation.spentCost > 0) {
+				info += `${theme.fg("dim", "Already spent:")} $${cacheWarmingStatus.evaluation.spentCost.toFixed(3)}\n`;
+			}
 		}
 
 		if (stats.cost > 0 || cacheWaste.missedTokens > 0) {
@@ -6663,10 +6662,6 @@ export class InteractiveMode {
 		this.clearStatusIndicator();
 		this.themeController.disableAutoSync();
 		this.clearExtensionTerminalInputListeners();
-		if (this.cacheWarmingAnimationTimer !== undefined) {
-			clearTimeout(this.cacheWarmingAnimationTimer);
-			this.cacheWarmingAnimationTimer = undefined;
-		}
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
 		if (this.unsubscribe) {

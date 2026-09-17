@@ -1,9 +1,14 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
-import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
+import { type ModelsSimpleStreamOptions, normalizeContext } from "@earendil-works/pi-ai";
+import {
+	type AssistantMessage,
+	clampThinkingLevel,
+	type Message,
+	type Model,
+	streamSimple,
+} from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
-import cacheWarmingExtension from "../extensions/cache-warming.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
@@ -16,7 +21,14 @@ import { ModelRuntime } from "./model-runtime.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
-import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
+import {
+	buildSessionContext,
+	getDefaultSessionDir,
+	type SessionEntry,
+	SessionManager,
+	type SessionMessageEntry,
+	type UsageEntry,
+} from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import { time } from "./timings.ts";
 import {
@@ -173,6 +185,39 @@ function getDefaultAgentDir(): string {
  * });
  * ```
  */
+function findRestorableCacheWarm(
+	branch: SessionEntry[],
+): { warm: UsageEntry; source: { entry: SessionMessageEntry; message: AssistantMessage } } | undefined {
+	let warmIndex = -1;
+	for (let i = branch.length - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (entry.type === "usage") {
+			if (entry.kind === "cache_warm") {
+				warmIndex = i;
+				break;
+			}
+			continue;
+		}
+		if (entry.type !== "label" && entry.type !== "session_info") return undefined;
+	}
+	if (warmIndex === -1) return undefined;
+
+	for (let i = warmIndex - 1; i >= 0; i--) {
+		const entry = branch[i];
+		if (
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			entry.message.stopReason !== "error" &&
+			entry.message.stopReason !== "aborted"
+		) {
+			const warm = branch[warmIndex];
+			if (warm.type !== "usage") return undefined;
+			return { warm, source: { entry, message: entry.message } };
+		}
+	}
+	return undefined;
+}
+
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	const cwd = resolvePath(options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd());
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getDefaultAgentDir();
@@ -186,12 +231,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
 
 	if (!resourceLoader) {
-		resourceLoader = new DefaultResourceLoader({
-			cwd,
-			agentDir,
-			settingsManager,
-			extensionFactories: [{ name: "cache-warming", factory: cacheWarmingExtension, hidden: true }],
-		});
+		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
 		await resourceLoader.reload();
 		time("resourceLoader.reload");
 	}
@@ -313,8 +353,65 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const cacheWarmer = new CacheWarmer(
 		modelRuntime,
 		sessionManager,
-		(event) => extensionRunnerRef.current?.emitCacheWarmingDecision(event) ?? "stop",
+		() => settingsManager.getCacheWarmingMode(),
+		async (event) => extensionRunnerRef.current?.emitCacheWarmingDecision(event) ?? event.action,
+		() => extensionRunnerRef.current?.hasHandlers("cache_warming_decision") ?? false,
+		hasExistingSession ? "session restored, warming starts after next request" : "waiting for first request",
 	);
+	const buildRequestOptions = (
+		requestModel: Model<any>,
+		options: ModelsSimpleStreamOptions = {},
+	): ModelsSimpleStreamOptions => {
+		const providerRetrySettings = settingsManager.getProviderRetrySettings();
+		const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
+		const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
+		const headerRunner = extensionRunnerRef.current;
+		return {
+			...options,
+			timeoutMs: options.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs,
+			websocketConnectTimeoutMs: options.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs(),
+			maxRetries: options.maxRetries ?? providerRetrySettings.maxRetries,
+			maxRetryDelayMs: options.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+			transformHeaders: async (requestHeaders) => {
+				const headers = mergeProviderAttributionHeaders(
+					requestModel,
+					settingsManager,
+					options.sessionId,
+					requestHeaders,
+				);
+				return headerRunner?.hasHandlers("before_provider_headers")
+					? headerRunner.emitBeforeProviderHeaders(headers ?? {})
+					: (headers ?? {});
+			},
+		};
+	};
+	const cacheContextIsCurrent = (requestModel: Model<any>) => {
+		const messages = agent.state.messages;
+		return () => {
+			const currentModel = agent.state.model;
+			const currentMessages = agent.state.messages;
+			return (
+				currentModel.provider === requestModel.provider &&
+				currentModel.id === requestModel.id &&
+				messages.length <= currentMessages.length &&
+				messages.every((message, index) => currentMessages[index] === message)
+			);
+		};
+	};
+	const transformProviderPayload = async (payload: unknown) => {
+		const runner = extensionRunnerRef.current;
+		if (!runner?.hasHandlers("before_provider_request")) return payload;
+		return runner.emitBeforeProviderRequest(payload);
+	};
+	const handleProviderResponse: NonNullable<ModelsSimpleStreamOptions["onResponse"]> = async (response) => {
+		const runner = extensionRunnerRef.current;
+		if (!runner?.hasHandlers("after_provider_response")) return;
+		await runner.emit({
+			type: "after_provider_response",
+			status: response.status,
+			headers: response.headers,
+		});
+	};
 
 	agent = new Agent({
 		initialState: {
@@ -325,58 +422,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
-			const providerRetrySettings = settingsManager.getProviderRetrySettings();
-			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
-			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".
-			// Use max int32 to effectively disable the timeout.
-			const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
-			const timeoutMs = options?.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs;
-			const websocketConnectTimeoutMs =
-				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
-			const headerRunner = extensionRunnerRef.current;
-			const requestOptions: ModelsSimpleStreamOptions = {
-				...options,
-				timeoutMs,
-				websocketConnectTimeoutMs,
-				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
-				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				transformHeaders: async (requestHeaders) => {
-					const headers = mergeProviderAttributionHeaders(
-						model,
-						settingsManager,
-						options?.sessionId,
-						requestHeaders,
-					);
-					return headerRunner?.hasHandlers("before_provider_headers")
-						? headerRunner.emitBeforeProviderHeaders(headers ?? {})
-						: (headers ?? {});
-				},
-			};
+			const requestOptions = buildRequestOptions(model, options);
 			// Compaction and summaries use their own routing ids; only session requests
-			// replace the cache entry, so warming restarts from them.
+			// replace the cache entry, so warming restarts from them. Keep warming while
+			// the current transcript still extends the request's prefix. Agent state may
+			// shallow-copy the messages array or refresh the model object without changing
+			// the provider request, so top-level object identity is not a valid cache key.
 			if (options?.sessionId === sessionManager.getSessionId()) {
-				cacheWarmer.start({ model, context, options: requestOptions }, settingsManager.getCacheWarming());
+				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
 			}
 			return modelRuntime.streamSimple(model, context, requestOptions);
 		},
-		onPayload: async (payload, _model) => {
-			const runner = extensionRunnerRef.current;
-			if (!runner?.hasHandlers("before_provider_request")) {
-				return payload;
-			}
-			return runner.emitBeforeProviderRequest(payload);
-		},
-		onResponse: async (response, _model) => {
-			const runner = extensionRunnerRef.current;
-			if (!runner?.hasHandlers("after_provider_response")) {
-				return;
-			}
-			await runner.emit({
-				type: "after_provider_response",
-				status: response.status,
-				headers: response.headers,
-			});
-		},
+		onPayload: transformProviderPayload,
+		onResponse: handleProviderResponse,
 		sessionId: sessionManager.getSessionId(),
 		transformContext: async (messages) => {
 			const runner = extensionRunnerRef.current;
@@ -420,6 +478,50 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
 	});
+	const restored = hasExistingSession ? findRestorableCacheWarm(sessionManager.getBranch()) : undefined;
+	if (restored) {
+		try {
+			const currentModel = agent.state.model;
+			const requestModel =
+				currentModel.provider === restored.source.message.provider &&
+				currentModel.id === restored.source.message.model
+					? currentModel
+					: undefined;
+			if (requestModel) {
+				const restoredContext = buildSessionContext(sessionManager.getEntries(), restored.source.entry.parentId);
+				const runner = extensionRunnerRef.current;
+				const transformedMessages = runner
+					? await runner.emitContext(restoredContext.messages)
+					: restoredContext.messages;
+				const restoredThinkingLevel = clampThinkingLevel(
+					requestModel,
+					(restoredContext.thinkingLevel ?? "off") as ThinkingLevel,
+				);
+				const lastActivityAt = Date.parse(restored.warm.timestamp);
+				if (Number.isFinite(lastActivityAt) && Number.isFinite(restored.source.message.timestamp)) {
+					cacheWarmer.start(
+						{
+							model: requestModel,
+							context: normalizeContext({ messages: convertToLlmWithBlockImages(transformedMessages) }),
+							options: buildRequestOptions(requestModel, {
+								reasoning: restoredThinkingLevel === "off" ? undefined : restoredThinkingLevel,
+								sessionId: sessionManager.getSessionId(),
+								transport: settingsManager.getTransport(),
+								thinkingBudgets: settingsManager.getThinkingBudgets(),
+								onPayload: transformProviderPayload,
+								onResponse: handleProviderResponse,
+							}),
+						},
+						cacheContextIsCurrent(requestModel),
+						{ lastActivityAt, startedAt: restored.source.message.timestamp },
+					);
+				}
+			}
+		} catch {
+			// Restoring cache warming is best-effort and must not prevent session startup.
+		}
+	}
+
 	const extensionsResult = resourceLoader.getExtensions();
 
 	return {

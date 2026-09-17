@@ -249,7 +249,7 @@ Current behavior:
 }
 ```
 
-The built-in catalog fills this in for direct Anthropic (5 min / 1 h) and direct OpenAI (5 min / 24 h, or 30 min for models that use `prompt_cache_options`). Proxies such as OpenRouter and custom providers have no entry. A model without a value for the tier a request used is never warmed; see [Cache Warming](settings.md#cache-warming).
+The built-in catalog fills this in for direct Anthropic (5 min / 1 h). Other providers, including direct OpenAI, have no built-in lifetime until their cache-expiry and replay behavior has been validated for warming. A model without a value for the tier a request used is never warmed; custom models and provider overrides can opt in when the backing cache behavior is known. See [Cache Warming](settings.md#cache-warming).
 
 ### Sampling Parameters
 

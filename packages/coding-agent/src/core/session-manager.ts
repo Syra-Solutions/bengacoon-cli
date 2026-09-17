@@ -80,6 +80,8 @@ export interface UsageEntry extends SessionEntryBase {
 	provider: string;
 	model: string;
 	usage: Usage;
+	/** Optional human-readable qualifier for usage notices. */
+	note?: string;
 }
 
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
@@ -1129,7 +1131,7 @@ export class SessionManager {
 	}
 
 	/** Append model-attributed usage that does not participate in LLM context. */
-	appendUsage(kind: string, provider: string, model: string, usage: Usage): string {
+	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): string {
 		const entry: UsageEntry = {
 			type: "usage",
 			id: generateId(this.byId),
@@ -1139,6 +1141,7 @@ export class SessionManager {
 			provider,
 			model,
 			usage,
+			...(note ? { note } : {}),
 		};
 		this._appendEntry(entry);
 		return entry.id;

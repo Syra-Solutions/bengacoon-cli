@@ -927,27 +927,19 @@ function applyOpenAIExplicitPromptCacheMetadata(model: Model<Api>): void {
 	};
 }
 
-// Best-effort prompt cache lifetimes for endpoints with documented cache behavior. Only
-// direct endpoints are annotated; proxies and other providers stay unset so pi does not
-// assume a lifetime it cannot verify.
-// Anthropic: ephemeral entries live 5 minutes, `ttl: "1h"` entries one hour.
+// Anthropic ephemeral entries have a hard five-minute lifetime; `ttl: "1h"`
+// extends it to one hour. Only direct Anthropic is annotated so cache warming
+// does not assume equivalent behavior through proxies.
 // https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-// OpenAI: in-memory entries clear after 5-10 minutes of inactivity; `prompt_cache_retention: "24h"`
-// keeps them up to 24 hours. Models using `prompt_cache_options` default to 30 minutes, which is
-// also the only supported explicit TTL.
-// https://developers.openai.com/api/docs/guides/prompt-caching
 const ANTHROPIC_PROMPT_CACHE: ModelPromptCache = { short: 300, long: 3600 };
-const OPENAI_PROMPT_CACHE: ModelPromptCache = { short: 300, long: 86400 };
-const OPENAI_EXPLICIT_PROMPT_CACHE: ModelPromptCache = { short: 1800, long: 1800 };
 
 function applyPromptCacheMetadata(model: Model<Api>): void {
 	if (model.provider === "anthropic" && model.api === "anthropic-messages") {
 		model.promptCache = ANTHROPIC_PROMPT_CACHE;
-		return;
 	}
-	if (model.provider !== "openai" || model.api !== "openai-responses" || !(model.cost.cacheRead > 0)) return;
-	const compat = model.compat as OpenAIResponsesCompat | undefined;
-	model.promptCache = compat?.supportsExplicitPromptCacheMode ? OPENAI_EXPLICIT_PROMPT_CACHE : OPENAI_PROMPT_CACHE;
+	// Do not add OpenAI lifetimes yet. Before enabling warming for explicit
+	// OpenAI caches, re-evaluate it using observed expiry, replay, and billing
+	// behavior; a documented TTL alone does not establish full cache loss.
 }
 
 function isGemma4Model(modelId: string): boolean {

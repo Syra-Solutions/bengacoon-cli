@@ -1,7 +1,12 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
-import type { CacheWarmingState } from "../../../core/cache-warmer.ts";
+import {
+	CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS,
+	type CacheWarmingEvaluation,
+	type CacheWarmingNotice,
+	type CacheWarmingStatus,
+} from "../../../core/cache-warmer.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
 import { addUsageToTotals, createUsageTotals } from "../../../core/usage-totals.ts";
@@ -30,41 +35,53 @@ export function formatTokens(count: number): string {
 	return `${Math.round(count / 1000000)}M`;
 }
 
-/** Fills as the next refresh approaches: empty right after a request, three quarters just before. */
-const CACHE_WARMING_FILL_FRAMES = ["○", "◔", "◑", "◕"];
-/** Spins while a refresh is in flight. */
-const CACHE_WARMING_SPIN_FRAMES = ["◐", "◓", "◑", "◒"];
-/** Keep spinning at least this long once a refresh starts, so short requests are still visible. */
-export const CACHE_WARMING_SPIN_MS = 2000;
-export const CACHE_WARMING_SPIN_FRAME_MS = 150;
+/** Shown after the cache hit rate while the prompt cache entry is being kept warm. */
+export const CACHE_WARMING_INDICATOR = "*";
 
-/** Time the current spin started, or undefined when the indicator should show the countdown fill. */
-export function cacheWarmingSpinStart(state: CacheWarmingState, now = Date.now()): number | undefined {
-	if (state.status === "warming") return state.startedAt;
-	if (state.status === "scheduled" && state.warmedAt !== undefined && now - state.warmedAt < CACHE_WARMING_SPIN_MS) {
-		return state.warmedAt;
-	}
-	return undefined;
+function formatDollars(value: number): string {
+	return value < 0 ? `-$${Math.abs(value).toFixed(3)}` : `$${value.toFixed(3)}`;
 }
 
-export function formatCacheWarmingIndicator(state: CacheWarmingState, now = Date.now()): string | undefined {
-	if (state.status === "inactive") return undefined;
-	const spinStart = cacheWarmingSpinStart(state, now);
-	if (spinStart !== undefined) {
-		const frame = Math.floor((now - spinStart) / CACHE_WARMING_SPIN_FRAME_MS);
-		return CACHE_WARMING_SPIN_FRAMES[frame % CACHE_WARMING_SPIN_FRAMES.length];
-	}
-	if (state.status !== "scheduled") return undefined;
-	const progress = (now - state.scheduledAt) / Math.max(1, state.nextWarmAt - state.scheduledAt);
-	const frame = Math.min(CACHE_WARMING_FILL_FRAMES.length - 1, Math.max(0, Math.floor(progress * 4)));
-	return CACHE_WARMING_FILL_FRAMES[frame];
+function formatCacheWarmingEconomics(evaluation: CacheWarmingEvaluation): string {
+	const probability = Math.round(evaluation.continuationProbability * 100);
+	const probabilityText =
+		evaluation.phase === "streaming"
+			? `${probability}% continuation probability while agent is running`
+			: `${probability}% continuation probability`;
+	const comparison = evaluation.action === "warm" ? ">=" : "<";
+	return `${probabilityText}, expected savings ${formatDollars(evaluation.expectedSavings)} ${comparison} $${CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS.toFixed(3)}`;
 }
 
-export function formatCacheWarmingStatus(state: CacheWarmingState, now = Date.now()): string {
-	if (state.status === "inactive") return "No refresh scheduled";
-	if (state.status === "warming") return "Refreshing now";
+export function formatCacheWarmingStatus(status: CacheWarmingStatus, now = Date.now()): string {
+	if (status.state === "inactive") return `Inactive (${status.reason ?? "unknown reason"})`;
 
-	let remainingSeconds = Math.max(0, Math.ceil((state.nextWarmAt - now) / 1000));
+	const evaluation = status.evaluation;
+	if (status.state === "stopped") {
+		if (!evaluation?.economicsAvailable) return `Stopped (${status.reason ?? "cache economics unavailable"})`;
+		const details = formatCacheWarmingEconomics(evaluation);
+		return status.extensionOverride ? `Stopped (extension override, ${details})` : `Stopped (${details} -> stop)`;
+	}
+
+	if (!evaluation?.economicsAvailable) {
+		const prefix = status.state === "refreshing" ? "Warming cache" : formatCacheWarmingDecisionTime(status, now);
+		return status.state === "refreshing"
+			? `${prefix} (extension override, cache economics unavailable)`
+			: `${prefix} (cache economics unavailable -> recommend stop)`;
+	}
+
+	const details = formatCacheWarmingEconomics(evaluation);
+	if (status.state === "refreshing") {
+		return status.extensionOverride
+			? `Warming cache (extension override, ${details})`
+			: `Warming cache (${details} -> warm)`;
+	}
+	const action = `${status.extensionPolicy ? "recommend " : ""}${evaluation.action}`;
+	return `${formatCacheWarmingDecisionTime(status, now)} (${details} -> ${action})`;
+}
+
+function formatCacheWarmingDecisionTime(status: CacheWarmingStatus, now: number): string {
+	if (status.nextWarmAt === undefined || status.nextWarmAt <= now) return "Decision now";
+	let remainingSeconds = Math.ceil((status.nextWarmAt - now) / 1000);
 	const hours = Math.floor(remainingSeconds / 3600);
 	remainingSeconds %= 3600;
 	const minutes = Math.floor(remainingSeconds / 60);
@@ -73,7 +90,13 @@ export function formatCacheWarmingStatus(state: CacheWarmingState, now = Date.no
 	if (hours > 0) parts.push(`${hours}h`);
 	if (minutes > 0) parts.push(`${minutes}m`);
 	if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
-	return `Next refresh in ${parts.join(" ")}`;
+	return `Decision in ${parts.join(" ")}`;
+}
+
+export function formatCacheWarmingNotice(notice: CacheWarmingNotice): string {
+	const note = notice.note === "extension override" ? " (extension override)" : "";
+	const cost = notice.usage.cost.total.toFixed(6).replace(/(\.\d{3}\d*?)0+$/, "$1");
+	return `Cache warmed${note}: $${cost}`;
 }
 
 export function formatCwdForFooter(cwd: string, home: string | undefined): string {
@@ -178,13 +201,13 @@ export class FooterComponent implements Component {
 
 		// Build stats line
 		const statsParts = [];
-		const cacheWarmingIndicator = formatCacheWarmingIndicator(this.session.cacheWarmingState);
 		if (usageTotals.input) statsParts.push(`↑${formatTokens(usageTotals.input)}`);
 		if (usageTotals.output) statsParts.push(`↓${formatTokens(usageTotals.output)}`);
 		if (usageTotals.cacheRead) statsParts.push(`R${formatTokens(usageTotals.cacheRead)}`);
 		if (usageTotals.cacheWrite) statsParts.push(`W${formatTokens(usageTotals.cacheWrite)}`);
 		if ((usageTotals.cacheRead > 0 || usageTotals.cacheWrite > 0) && latestCacheHitRate !== undefined) {
-			statsParts.push(`CH${latestCacheHitRate.toFixed(1)}%`);
+			const warming = this.session.cacheWarmingStatus?.indicator ? theme.fg("dim", CACHE_WARMING_INDICATOR) : "";
+			statsParts.push(`CH${latestCacheHitRate.toFixed(1)}%${warming}`);
 		}
 
 		// Kimi Coding is subscription-backed despite using API-key authentication.
@@ -210,7 +233,6 @@ export class FooterComponent implements Component {
 		} else {
 			contextPercentStr = contextPercentDisplay;
 		}
-		if (cacheWarmingIndicator) statsParts.push(cacheWarmingIndicator);
 		statsParts.push(contextPercentStr);
 		if (areExperimentalFeaturesEnabled()) {
 			statsParts.push(`${theme.fg("dim", "•")} ${theme.bold(theme.fg("warning", "xp"))}`);

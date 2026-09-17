@@ -24,6 +24,7 @@ export {
 	type SessionStats,
 } from "./core/agent-session.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
+export type { CacheWarmingEvaluation, CacheWarmingNotice, CacheWarmingStatus } from "./core/cache-warmer.ts";
 // Compaction
 export {
 	type BranchPreparation,
@@ -274,7 +275,6 @@ export {
 } from "./core/session-manager.ts";
 export {
 	type CacheWarmingMode,
-	type CacheWarmingSettings,
 	type CompactionModelOverride,
 	type CompactionSettings,
 	type DefaultProjectTrust,

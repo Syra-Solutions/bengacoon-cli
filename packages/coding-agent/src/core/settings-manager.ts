@@ -73,12 +73,9 @@ export interface ThinkingBudgetsSettings {
 
 export type MermaidRenderingMode = "off" | "final" | "streaming";
 
-/** Cache-warming profile. "auto" estimates likely user continuation from session activity. */
-export type CacheWarmingMode = "off" | "streaming" | "idle" | "auto";
-
-export interface CacheWarmingSettings {
-	mode?: CacheWarmingMode; // default: "streaming"
-}
+/** Cache-warming profile. "idle" also warms between agent runs. */
+export type CacheWarmingMode = "off" | "streaming" | "idle";
+export const CACHE_WARMING_MODES: readonly CacheWarmingMode[] = ["off", "streaming", "idle"];
 
 export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
@@ -157,7 +154,7 @@ export interface Settings {
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
-	cacheWarming?: CacheWarmingSettings; // Prompt cache warming; global only because each refresh costs money
+	cacheWarming?: CacheWarmingMode; // default: "streaming"; global only because each refresh costs money
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
 	tuiMode?: TuiMode; // default: "regular"
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
@@ -473,16 +470,6 @@ export class SettingsManager {
 			} else {
 				delete settings.skills;
 			}
-		}
-
-		// cacheWarming.maxMinutes was replaced by a fixed internal safety cap.
-		if (
-			"cacheWarming" in settings &&
-			typeof settings.cacheWarming === "object" &&
-			settings.cacheWarming !== null &&
-			!Array.isArray(settings.cacheWarming)
-		) {
-			delete (settings.cacheWarming as Record<string, unknown>).maxMinutes;
 		}
 
 		// Migrate retry.maxDelayMs -> retry.provider.maxRetryDelayMs
@@ -965,17 +952,14 @@ export class SettingsManager {
 	}
 
 	/** Read from global settings only because warming costs money. */
-	getCacheWarming(): Required<CacheWarmingSettings> {
-		const mode = this.globalSettings.cacheWarming?.mode;
-		return {
-			mode: mode === "off" || mode === "idle" || mode === "auto" ? mode : "streaming",
-		};
+	getCacheWarmingMode(): CacheWarmingMode {
+		const mode = this.globalSettings.cacheWarming;
+		return mode !== undefined && CACHE_WARMING_MODES.includes(mode) ? mode : "streaming";
 	}
 
 	setCacheWarmingMode(mode: CacheWarmingMode): void {
-		this.globalSettings.cacheWarming ??= {};
-		this.globalSettings.cacheWarming.mode = mode;
-		this.markModified("cacheWarming", "mode");
+		this.globalSettings.cacheWarming = mode;
+		this.markModified("cacheWarming");
 		this.save();
 	}
 

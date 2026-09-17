@@ -740,17 +740,19 @@ Header availability depends on provider and transport. Providers that abstract H
 
 #### cache_warming_decision
 
-Fired before each candidate prompt-cache refresh. The bundled policy runs first; user extensions can inspect its estimates and override the action. Prompt contents are not exposed.
+Fired before each prompt-cache refresh with pi's decision filled in. Prompt contents are not exposed.
 
 ```typescript
 pi.on("cache_warming_decision", (event, ctx) => {
-  // event.profile: "streaming" | "idle" | "auto"
-  // event.phase: "streaming" | "idle"
+  // event.mode: "streaming" | "idle" (the cacheWarming setting)
+  // event.phase: "streaming" while the agent is running, "idle" afterwards
+  // event.model: { provider, id }
   // event.promptTokens, event.ttlMs
-  // event.costs: cacheHit, cacheMiss, missPenalty, nextWarm
-  // event.cumulativeWarmCost
-  // event.continuationProbability, event.expectedSavings
-  // event.minimumExpectedSavings, event.defaultAction
+  // event.warmCost: price of this refresh
+  // event.missCost: extra price of the next request if the entry is lost
+  // event.spentCost: refreshes already sent for this entry
+  // event.continuationProbability: pi's estimate that a request arrives in time
+  // event.action: "warm" | "stop", pi's decision
 
   if (event.model.provider === "my-provider") {
     return { action: "stop" };
@@ -758,7 +760,7 @@ pi.on("cache_warming_decision", (event, ctx) => {
 });
 ```
 
-Return `{ action: "warm" }` or `{ action: "stop" }` to override the bundled decision. A handler may also return `continuationProbability`, `expectedSavings`, or `minimumExpectedSavings` to describe its custom policy to later handlers. The last user-extension action wins.
+Return `{ action: "warm" }` or `{ action: "stop" }` to override; the last handler that returns an action wins. `"stop"` ends warming until the next real request.
 
 ### Model Events
 

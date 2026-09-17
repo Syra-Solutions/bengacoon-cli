@@ -241,9 +241,9 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 
 	describe("OpenAI Responses Provider", () => {
 		it.each(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"] as const)(
-			"uses the documented 30-minute default and long cache lifetime for %s",
+			"does not enable cache warming from the documented TTL alone for %s",
 			(modelId) => {
-				expect(getModel("openai", modelId).promptCache).toEqual({ short: 1800, long: 1800 });
+				expect(getModel("openai", modelId).promptCache).toBeUndefined();
 			},
 		);
 

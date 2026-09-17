@@ -51,7 +51,7 @@ describe("createAgentSession stream options", () => {
 		};
 	}
 
-	function createDoneStream(api: Api) {
+	function createDoneStream(api: Api, promptTokens = 0) {
 		const stream = createAssistantMessageEventStream();
 		const message: AssistantMessage = {
 			role: "assistant",
@@ -62,9 +62,9 @@ describe("createAgentSession stream options", () => {
 			usage: {
 				input: 0,
 				output: 0,
-				cacheRead: 0,
+				cacheRead: promptTokens,
 				cacheWrite: 0,
-				totalTokens: 0,
+				totalTokens: promptTokens,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",
@@ -122,6 +122,119 @@ describe("createAgentSession stream options", () => {
 			modelRegistry.unregisterProvider(model.provider);
 		}
 	}
+
+	it("schedules cache warming after a completed session request", async () => {
+		const model = {
+			...createModel("anthropic-messages"),
+			cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+			promptCache: { short: 300 },
+		};
+		const settingsManager = SettingsManager.inMemory({ cacheWarming: "idle" });
+		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "test-api-key" }));
+		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
+		modelRegistry.registerProvider(model.provider, {
+			api: model.api,
+			streamSimple: () => createDoneStream(model.api, 100_000),
+		});
+		const sessionManager = SessionManager.inMemory(cwd);
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model,
+			modelRuntime: getModelRuntime(modelRegistry),
+			settingsManager,
+			sessionManager,
+		});
+
+		try {
+			await session.prompt("test");
+			expect(session.cacheWarmingStatus?.nextWarmAt).toBeGreaterThan(Date.now());
+
+			// Agent state setters shallow-copy arrays and registry refreshes replace model objects.
+			session.agent.state.messages = [...session.agent.state.messages];
+			session.agent.state.model = { ...session.agent.state.model };
+			expect(session.cacheWarmingStatus?.nextWarmAt).toBeGreaterThan(Date.now());
+
+			session.agent.state.messages = session.agent.state.messages.slice(1);
+			expect(session.cacheWarmingStatus).toMatchObject({
+				state: "inactive",
+				reason: "conversation context changed",
+			});
+		} finally {
+			session.dispose();
+			modelRegistry.unregisterProvider(model.provider);
+		}
+	});
+
+	it("restores cache warming only from persisted successful warming usage", async () => {
+		const model = {
+			...createModel("anthropic-messages"),
+			cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+			promptCache: { short: 300 },
+		};
+		const settingsManager = SettingsManager.inMemory({ cacheWarming: "idle" });
+		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "test-api-key" }));
+		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
+		let providerCalls = 0;
+		modelRegistry.registerProvider(model.provider, {
+			api: model.api,
+			streamSimple: () => {
+				providerCalls++;
+				return createDoneStream(model.api, 100_000);
+			},
+		});
+		const sessionManager = SessionManager.inMemory(cwd);
+		sessionManager.appendModelChange(model.provider, model.id);
+		sessionManager.appendThinkingLevelChange("off");
+		sessionManager.appendMessage({ role: "user", content: "test", timestamp: Date.now() - 60_000 });
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "ok" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 1,
+				cacheRead: 100_000,
+				cacheWrite: 0,
+				totalTokens: 100_001,
+				cost: { input: 0, output: 0, cacheRead: 0.025, cacheWrite: 0, total: 0.025 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now() - 59_000,
+		});
+		sessionManager.appendUsage("cache_warm", model.provider, model.id, {
+			input: 0,
+			output: 1,
+			cacheRead: 100_000,
+			cacheWrite: 0,
+			totalTokens: 100_001,
+			cost: { input: 0, output: 0, cacheRead: 0.025, cacheWrite: 0, total: 0.025 },
+		});
+
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model,
+			modelRuntime: getModelRuntime(modelRegistry),
+			settingsManager,
+			sessionManager,
+		});
+
+		try {
+			expect(providerCalls).toBe(0);
+			expect(session.cacheWarmingStatus).toMatchObject({
+				state: "scheduled",
+				evaluation: { phase: "idle", spentCost: 0.025 },
+			});
+		} finally {
+			session.dispose();
+			modelRegistry.unregisterProvider(model.provider);
+		}
+	});
 
 	it("forwards httpIdleTimeoutMs as timeoutMs for OpenAI Codex", async () => {
 		const options = await captureStreamOptions("openai-codex-responses", { httpIdleTimeoutMs: 1234 });

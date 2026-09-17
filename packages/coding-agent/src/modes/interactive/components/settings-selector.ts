@@ -11,15 +11,15 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
-import { CACHE_WARMING_MODES } from "../../../core/cache-warmer.ts";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
-import type {
-	CacheWarmingMode,
-	DefaultProjectTrust,
-	FullscreenExitOutput,
-	MermaidRenderingMode,
-	TuiMode,
-	WarningSettings,
+import {
+	CACHE_WARMING_MODES,
+	type CacheWarmingMode,
+	type DefaultProjectTrust,
+	type FullscreenExitOutput,
+	type MermaidRenderingMode,
+	type TuiMode,
+	type WarningSettings,
 } from "../../../core/settings-manager.ts";
 import { getSettingsListTheme, parseAutoThemeSetting, type TerminalTheme, theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
@@ -503,7 +503,7 @@ export class SettingsSelectorComponent extends Container {
 				id: "cache-warming-mode",
 				label: "Cache warming",
 				description:
-					"off; streaming while the agent runs; idle with cost-conscious continuation; auto based on session activity",
+					"off; streaming while the agent runs; idle also between runs while continuation stays profitable",
 				currentValue: config.cacheWarmingMode,
 				values: [...CACHE_WARMING_MODES],
 			},

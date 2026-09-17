@@ -1,11 +1,11 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
-import type { CacheWarmingState } from "../src/core/cache-warmer.ts";
+import type { CacheWarmingEvaluation, CacheWarmingStatus } from "../src/core/cache-warmer.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
 import {
 	FooterComponent,
-	formatCacheWarmingIndicator,
+	formatCacheWarmingNotice,
 	formatCacheWarmingStatus,
 	formatCwdForFooter,
 } from "../src/modes/interactive/components/footer.ts";
@@ -31,7 +31,7 @@ function createSession(options: {
 	compactionUsage?: AssistantUsage;
 	toolUsage?: AssistantUsage;
 	usingSubscription?: boolean;
-	cacheWarmingState?: CacheWarmingState;
+	cacheWarmingStatus?: CacheWarmingStatus;
 }): AgentSession {
 	const usage = options.usage;
 	const entries: Array<Record<string, unknown>> = [];
@@ -86,7 +86,7 @@ function createSession(options: {
 			getCwd: () => "/tmp/project",
 		},
 		getContextUsage: () => ({ contextWindow: 200_000, percent: 12.3 }),
-		cacheWarmingState: options.cacheWarmingState ?? { status: "inactive" },
+		cacheWarmingStatus: options.cacheWarmingStatus,
 		modelRuntime: {
 			isUsingSubscription: () => options.usingSubscription ?? false,
 		},
@@ -121,52 +121,77 @@ describe("formatCwdForFooter", () => {
 });
 
 describe("formatCacheWarmingStatus", () => {
-	it("describes scheduled and active refreshes", () => {
+	const evaluation: CacheWarmingEvaluation = {
+		type: "cache_warming_decision",
+		mode: "idle",
+		phase: "idle",
+		model: { provider: "test", id: "model" },
+		ttlMs: 300_000,
+		promptTokens: 100_000,
+		warmCost: 0.013,
+		missCost: 0.621,
+		spentCost: 0,
+		continuationProbability: 0.6,
+		expectedSavings: 0.36,
+		economicsAvailable: true,
+		action: "warm",
+	};
+
+	it("describes the decision and its economics", () => {
 		expect(
-			formatCacheWarmingStatus({ status: "scheduled", mode: "idle", scheduledAt: 0, nextWarmAt: 222_000 }, 0),
-		).toBe("Next refresh in 3m 42s");
+			formatCacheWarmingStatus(
+				{
+					state: "scheduled",
+					nextWarmAt: 222_000,
+					evaluation,
+					extensionPolicy: false,
+					extensionOverride: false,
+					indicator: true,
+				},
+				0,
+			),
+		).toBe("Decision in 3m 42s (60% continuation probability, expected savings $0.360 >= $0.050 -> warm)");
 		expect(
-			formatCacheWarmingStatus({ status: "scheduled", mode: "streaming", scheduledAt: 0, nextWarmAt: 60_000 }, 0),
-		).toBe("Next refresh in 1m");
-		expect(formatCacheWarmingStatus({ status: "warming", mode: "idle", startedAt: 0 }, 0)).toBe("Refreshing now");
-		expect(formatCacheWarmingStatus({ status: "inactive" }, 0)).toBe("No refresh scheduled");
+			formatCacheWarmingStatus(
+				{
+					state: "scheduled",
+					nextWarmAt: 222_000,
+					evaluation: { ...evaluation, phase: "streaming", continuationProbability: 1 },
+					extensionPolicy: false,
+					extensionOverride: false,
+					indicator: true,
+				},
+				0,
+			),
+		).toContain("100% continuation probability while agent is running");
+		expect(
+			formatCacheWarmingStatus(
+				{
+					state: "inactive",
+					reason: "cache economics unavailable",
+					extensionPolicy: false,
+					extensionOverride: false,
+					indicator: false,
+				},
+				0,
+			),
+		).toBe("Inactive (cache economics unavailable)");
 	});
-});
 
-describe("formatCacheWarmingIndicator", () => {
-	it("fills a quarter at a time as the refresh approaches", () => {
-		const scheduled = { status: "scheduled", mode: "idle", scheduledAt: 0, nextWarmAt: 400 } as const;
-		expect([0, 100, 200, 300, 399, 450].map((now) => formatCacheWarmingIndicator(scheduled, now))).toEqual([
-			"○",
-			"◔",
-			"◑",
-			"◕",
-			"◕",
-			"◕",
-		]);
-		expect(formatCacheWarmingIndicator({ status: "inactive" }, 0)).toBeUndefined();
-	});
-
-	it("spins during a refresh and for two seconds afterwards", () => {
-		const warming = { status: "warming", mode: "idle", startedAt: 1000 } as const;
-		expect([1000, 1150, 1300, 1450, 1600].map((now) => formatCacheWarmingIndicator(warming, now))).toEqual([
-			"◐",
-			"◓",
-			"◑",
-			"◒",
-			"◐",
-		]);
-
-		const afterWarm = {
-			status: "scheduled",
-			mode: "idle",
-			scheduledAt: 1200,
-			nextWarmAt: 241_200,
-			warmedAt: 1000,
-		} as const;
-		expect(formatCacheWarmingIndicator(afterWarm, 1300)).toBe("◑");
-		expect(formatCacheWarmingIndicator(afterWarm, 2999)).toBe("◓");
-		expect(formatCacheWarmingIndicator(afterWarm, 3000)).toBe("○");
+	it("reports actual warming cost and extension overrides", () => {
+		expect(
+			formatCacheWarmingNotice({
+				note: "extension override",
+				usage: {
+					input: 4,
+					output: 1,
+					cacheRead: 117_629,
+					cacheWrite: 0,
+					totalTokens: 117_634,
+					cost: { input: 0.00004, output: 0.00005, cacheRead: 0.02940725, cacheWrite: 0, total: 0.02949725 },
+				},
+			}),
+		).toBe("Cache warmed (extension override): $0.029497");
 	});
 });
 
@@ -265,22 +290,27 @@ describe("FooterComponent width handling", () => {
 		expect(statsLine).toContain("CH25.0%");
 	});
 
-	it("shows the cache warming indicator before context usage", () => {
-		vi.useFakeTimers();
-		try {
-			vi.setSystemTime(0);
-			const session = createSession({
-				sessionName: "",
-				cacheWarmingState: { status: "scheduled", mode: "idle", scheduledAt: 0, nextWarmAt: 60_000 },
-			});
-			const footer = new FooterComponent(session, createFooterData(1));
+	it("marks the cache hit rate while the prompt cache is kept warm", () => {
+		const session = createSession({
+			sessionName: "",
+			usage: {
+				input: 100,
+				output: 10,
+				cacheRead: 50,
+				cacheWrite: 50,
+				cost: { total: 0.001 },
+			},
+			cacheWarmingStatus: {
+				state: "scheduled",
+				nextWarmAt: 60_000,
+				extensionPolicy: false,
+				extensionOverride: false,
+				indicator: true,
+			},
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
 
-			expect(stripAnsi(footer.render(120)[1])).toContain("○ 12.3%/200k");
-			vi.setSystemTime(45_000);
-			expect(stripAnsi(footer.render(120)[1])).toContain("◕ 12.3%/200k");
-		} finally {
-			vi.useRealTimers();
-		}
+		expect(stripAnsi(footer.render(120)[1])).toContain("CH25.0%* ");
 	});
 
 	it("marks Kimi Coding costs as subscription estimates", () => {

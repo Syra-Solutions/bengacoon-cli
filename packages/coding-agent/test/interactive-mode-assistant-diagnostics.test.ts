@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
+import type { CacheWarmingNotice } from "../src/core/cache-warmer.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -62,6 +63,44 @@ describe("InteractiveMode assistant diagnostics", () => {
 			settingsManager: { getShowCacheMissNotices: () => false },
 		};
 		maybeShowAssistantDiagnostics.call(disabled, message);
+		expect(disabled.chatContainer.children).toHaveLength(0);
+	});
+
+	test("shows cache-warming outcomes when cache miss notices are enabled", () => {
+		const addCacheWarmingNotice = Reflect.get(InteractiveMode.prototype, "addCacheWarmingNotice") as (
+			this: {
+				chatContainer: Container;
+				settingsManager: { getShowCacheMissNotices(): boolean };
+			},
+			notice: CacheWarmingNotice,
+		) => void;
+		const notice: CacheWarmingNotice = {
+			note: "extension override",
+			usage: {
+				input: 4,
+				output: 1,
+				cacheRead: 117_629,
+				cacheWrite: 0,
+				totalTokens: 117_634,
+				cost: { input: 0.00004, output: 0.00005, cacheRead: 0.02940725, cacheWrite: 0, total: 0.02949725 },
+			},
+		};
+
+		initTheme("dark");
+		const enabled = {
+			chatContainer: new Container(),
+			settingsManager: { getShowCacheMissNotices: () => true },
+		};
+		addCacheWarmingNotice.call(enabled, notice);
+		expect(stripAnsi(enabled.chatContainer.render(120).join("\n"))).toContain(
+			"Cache warmed (extension override): $0.029497",
+		);
+
+		const disabled = {
+			chatContainer: new Container(),
+			settingsManager: { getShowCacheMissNotices: () => false },
+		};
+		addCacheWarmingNotice.call(disabled, notice);
 		expect(disabled.chatContainer.children).toHaveLength(0);
 	});
 });

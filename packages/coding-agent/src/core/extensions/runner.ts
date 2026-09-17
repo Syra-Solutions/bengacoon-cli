@@ -893,40 +893,25 @@ export class ExtensionRunner {
 		return result as RunnerEmitResult<TEvent>;
 	}
 
+	/** Returns the event's own action unless a handler overrides it; the last override wins. */
 	async emitCacheWarmingDecision(event: CacheWarmingDecisionEvent): Promise<CacheWarmingAction> {
 		const ctx = this.createContext();
-		const currentEvent = { ...event };
-		let action: CacheWarmingAction = "stop";
-		const groups = [
-			this.extensions.filter((extension) => extension.hidden),
-			this.extensions.filter((extension) => !extension.hidden),
-		];
+		let action = event.action;
 
-		for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
-			for (const ext of groups[groupIndex]) {
-				for (const handler of ext.handlers.get("cache_warming_decision") ?? []) {
-					try {
-						const result = (await handler(currentEvent, ctx)) as CacheWarmingDecisionEventResult | undefined;
-						if (!result) continue;
-						if (result.continuationProbability !== undefined) {
-							currentEvent.continuationProbability = result.continuationProbability;
-						}
-						if (result.expectedSavings !== undefined) currentEvent.expectedSavings = result.expectedSavings;
-						if (result.minimumExpectedSavings !== undefined) {
-							currentEvent.minimumExpectedSavings = result.minimumExpectedSavings;
-						}
-						if (result.action !== undefined) action = result.action;
-					} catch (err) {
-						this.emitError({
-							extensionPath: ext.path,
-							event: event.type,
-							error: err instanceof Error ? err.message : String(err),
-							stack: err instanceof Error ? err.stack : undefined,
-						});
-					}
+		for (const ext of this.extensions) {
+			for (const handler of ext.handlers.get("cache_warming_decision") ?? []) {
+				try {
+					const result = (await handler(event, ctx)) as CacheWarmingDecisionEventResult | undefined;
+					if (result?.action !== undefined) action = result.action;
+				} catch (err) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: event.type,
+						error: err instanceof Error ? err.message : String(err),
+						stack: err instanceof Error ? err.stack : undefined,
+					});
 				}
 			}
-			if (groupIndex === 0) currentEvent.defaultAction = action;
 		}
 
 		return action;
