@@ -1322,6 +1322,7 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 				provider: "vercel-ai-gateway",
 				reasoning: tags.includes("reasoning"),
 				input,
+				compat: { allowEmptySignature: true },
 				cost: {
 					input: inputCost,
 					output: outputCost,
