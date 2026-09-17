@@ -933,11 +933,12 @@ function applyOpenAIExplicitPromptCacheMetadata(model: Model<Api>): void {
 // Anthropic: ephemeral entries live 5 minutes, `ttl: "1h"` entries one hour.
 // https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
 // OpenAI: in-memory entries clear after 5-10 minutes of inactivity; `prompt_cache_retention: "24h"`
-// keeps them up to 24 hours, and models using `prompt_cache_options` get 30 minutes instead.
+// keeps them up to 24 hours. Models using `prompt_cache_options` default to 30 minutes, which is
+// also the only supported explicit TTL.
 // https://developers.openai.com/api/docs/guides/prompt-caching
 const ANTHROPIC_PROMPT_CACHE: ModelPromptCache = { short: 300, long: 3600 };
 const OPENAI_PROMPT_CACHE: ModelPromptCache = { short: 300, long: 86400 };
-const OPENAI_EXPLICIT_PROMPT_CACHE: ModelPromptCache = { short: 300, long: 1800 };
+const OPENAI_EXPLICIT_PROMPT_CACHE: ModelPromptCache = { short: 1800, long: 1800 };
 
 function applyPromptCacheMetadata(model: Model<Api>): void {
 	if (model.provider === "anthropic" && model.api === "anthropic-messages") {

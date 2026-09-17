@@ -64,7 +64,6 @@ import {
 	computeCacheWaste,
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
-import { formatCacheWarmingMaxMinutes } from "../../core/cache-warmer.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -4618,7 +4617,6 @@ export class InteractiveMode {
 					transport: this.settingsManager.getTransport(),
 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
 					cacheWarmingMode: cacheWarming.mode,
-					cacheWarmingMaxMinutes: cacheWarming.maxMinutes,
 					thinkingLevel: this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
 					availableThinkingLevels: [...THINKING_LEVEL_OPTIONS],
 					modelThinkingLevels: this.settingsManager.getAllModelThinkingLevels(),
@@ -4696,10 +4694,6 @@ export class InteractiveMode {
 						this.settingsManager.setCacheWarmingMode(mode);
 						if (mode === "off") this.session.stopCacheWarming();
 						this.showStatus(`Cache warming: ${mode}`);
-					},
-					onCacheWarmingMaxMinutesChange: (minutes) => {
-						this.settingsManager.setCacheWarmingMaxMinutes(minutes);
-						this.showStatus(`Cache warming duration: ${formatCacheWarmingMaxMinutes(minutes)}`);
 					},
 					onModelThinkingLevelChange: (provider, modelId, level) => {
 						this.settingsManager.setModelThinkingLevel(provider, modelId, level);
@@ -6313,7 +6307,7 @@ export class InteractiveMode {
 		const cacheWarming = this.settingsManager.getCacheWarming();
 		if (cacheWarming.mode !== "off") {
 			info += `\n${theme.bold("Cache Warming")}\n`;
-			info += `${theme.fg("dim", "Mode:")} ${cacheWarming.mode}, ${formatCacheWarmingMaxMinutes(cacheWarming.maxMinutes)}\n`;
+			info += `${theme.fg("dim", "Mode:")} ${cacheWarming.mode}\n`;
 			info += `${theme.fg("dim", "Status:")} ${formatCacheWarmingStatus(this.session.cacheWarmingState)}\n`;
 		}
 

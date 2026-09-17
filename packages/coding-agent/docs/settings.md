@@ -34,29 +34,30 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses, compaction or branch-summary usage, and provider recovery diagnostics such as dropped Anthropic thinking blocks |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level. Anthropic, Google, and Bedrock use these natively. OpenAI-compatible models use them when `compat.thinkingTokenBudgetField` (or `supportsThinkingTokenBudget`) is set. |
-| `cacheWarming.mode` | string | `"off"` | Prompt cache warming: `"off"`, `"streaming"` (while the agent runs), or `"idle"` (also after it settles). Global setting only. |
-| `cacheWarming.maxMinutes` | number | `60` | Stop warming this many minutes after the last request, in either mode. `/settings` offers 30, 60, and 120. Global setting only. |
+| `cacheWarming.mode` | string | `"streaming"` | Prompt cache-warming profile: `"off"`, `"streaming"`, `"idle"`, or `"auto"`. Global setting only. |
 
 #### Cache Warming
 
-Providers drop a prompt cache entry after a few minutes of inactivity, so the first request after a pause pays full input price again. With warming on, pi re-sends the last request with a minimal output budget shortly before the entry would expire, and keeps doing so until a new request replaces the entry, the context changes (model switch, compaction, branch switch, reload), or the window ends:
+Providers drop a prompt cache entry after a period of inactivity, so the first request after a pause pays full input price again. Cache warming re-sends the last request with a one-token output budget shortly before expiry:
 
-- `"streaming"` keeps the entry warm through long tool executions and stops as soon as the agent settles.
-- `"idle"` also keeps it warm while pi waits for your next prompt.
-- `maxMinutes` caps both, so a stuck tool or a session left open overnight stops warming on its own.
+- `"off"` disables warming.
+- `"streaming"` protects expensive prefixes during long tool executions and stops as soon as the agent settles.
+- `"idle"` also considers refreshes while waiting for your next prompt, using a fixed 25% continuation probability.
+- `"auto"` re-estimates idle continuation probability from user-message gaps in the current session, clamped to 25-75%.
 
 ```json
 {
   "cacheWarming": {
-    "mode": "idle",
-    "maxMinutes": 60
+    "mode": "auto"
   }
 }
 ```
 
-Each refresh re-sends the last request through the same path as the original, with `max_tokens` set to 1, and is billed as a cache read of the full context plus one output token. Usage and cost show up in session totals but never enter model context.
+The bundled cache-warming extension sends a refresh only when the expected avoided cache-miss cost, minus accumulated and next-refresh cost, retains at least $0.05 of expected savings. Active agent runs use 100% continuation probability. Warming stops no later than 60 minutes after the last real provider request.
 
-Warming needs a known cache lifetime for the model and the retention tier the request used (`short`, or `long` with `PI_CACHE_RETENTION=long`). The built-in catalog carries lifetimes for direct Anthropic and direct OpenAI; custom models and proxies can declare theirs with `promptCache` in `models.json` (see [Prompt Cache Lifetimes](models.md#prompt-cache-lifetimes)). Pi refreshes at 80% of that lifetime. If the lifetime already exceeds the window, nothing is sent. Claude models that use budget-based rather than adaptive thinking are skipped while thinking is on, because Anthropic derives the thinking budget from `max_tokens` and keys the message cache on it, so a one-token request cannot reproduce the entry.
+Each refresh is billed as a cache read of the full context plus one output token. Usage and cost show up in session totals but never enter model context. Pi schedules candidates at 90% of the cache lifetime while leaving at least ten seconds before expiry.
+
+Warming needs a known cache lifetime for the model and the retention tier the request used (`short`, or `long` with `PI_CACHE_RETENTION=long`). The built-in catalog carries lifetimes for direct Anthropic and direct OpenAI; custom models and proxies can declare theirs with `promptCache` in `models.json` (see [Prompt Cache Lifetimes](models.md#prompt-cache-lifetimes)). Claude models that use budget-based rather than adaptive thinking are skipped while thinking is on, because Anthropic derives the thinking budget from `max_tokens` and keys the message cache on it, so a one-token request cannot reproduce the entry.
 
 #### thinkingBudgets
 

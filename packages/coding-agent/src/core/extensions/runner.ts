@@ -6,6 +6,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Model, Provider, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
+import type { CacheWarmingAction } from "../cache-warmer.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
@@ -22,6 +23,8 @@ import type {
 	BeforeAgentStartEventResult,
 	BeforeProviderHeadersEvent,
 	BeforeProviderRequestEvent,
+	CacheWarmingDecisionEvent,
+	CacheWarmingDecisionEventResult,
 	CompactOptions,
 	ContextEvent,
 	ContextEventResult,
@@ -135,6 +138,7 @@ type RunnerEmitEvent = Exclude<
 	| ToolResultEvent
 	| UserBashEvent
 	| ContextEvent
+	| CacheWarmingDecisionEvent
 	| BeforeProviderRequestEvent
 	| BeforeProviderHeadersEvent
 	| BeforeAgentStartEvent
@@ -887,6 +891,45 @@ export class ExtensionRunner {
 		}
 
 		return result as RunnerEmitResult<TEvent>;
+	}
+
+	async emitCacheWarmingDecision(event: CacheWarmingDecisionEvent): Promise<CacheWarmingAction> {
+		const ctx = this.createContext();
+		const currentEvent = { ...event };
+		let action: CacheWarmingAction = "stop";
+		const groups = [
+			this.extensions.filter((extension) => extension.hidden),
+			this.extensions.filter((extension) => !extension.hidden),
+		];
+
+		for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+			for (const ext of groups[groupIndex]) {
+				for (const handler of ext.handlers.get("cache_warming_decision") ?? []) {
+					try {
+						const result = (await handler(currentEvent, ctx)) as CacheWarmingDecisionEventResult | undefined;
+						if (!result) continue;
+						if (result.continuationProbability !== undefined) {
+							currentEvent.continuationProbability = result.continuationProbability;
+						}
+						if (result.expectedSavings !== undefined) currentEvent.expectedSavings = result.expectedSavings;
+						if (result.minimumExpectedSavings !== undefined) {
+							currentEvent.minimumExpectedSavings = result.minimumExpectedSavings;
+						}
+						if (result.action !== undefined) action = result.action;
+					} catch (err) {
+						this.emitError({
+							extensionPath: ext.path,
+							event: event.type,
+							error: err instanceof Error ? err.message : String(err),
+							stack: err instanceof Error ? err.stack : undefined,
+						});
+					}
+				}
+			}
+			if (groupIndex === 0) currentEvent.defaultAction = action;
+		}
+
+		return action;
 	}
 
 	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {

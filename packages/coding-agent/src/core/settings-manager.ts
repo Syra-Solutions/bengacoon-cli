@@ -73,15 +73,12 @@ export interface ThinkingBudgetsSettings {
 
 export type MermaidRenderingMode = "off" | "final" | "streaming";
 
-/** "streaming" warms only while the agent runs; "idle" keeps warming after it settles. */
-export type CacheWarmingMode = "off" | "streaming" | "idle";
+/** Cache-warming profile. "auto" estimates likely user continuation from session activity. */
+export type CacheWarmingMode = "off" | "streaming" | "idle" | "auto";
 
 export interface CacheWarmingSettings {
-	mode?: CacheWarmingMode; // default: "off"
-	maxMinutes?: number; // default: 60; stop warming this long after the last request
+	mode?: CacheWarmingMode; // default: "streaming"
 }
-
-export const DEFAULT_CACHE_WARMING_MAX_MINUTES = 60;
 
 export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
@@ -476,6 +473,16 @@ export class SettingsManager {
 			} else {
 				delete settings.skills;
 			}
+		}
+
+		// cacheWarming.maxMinutes was replaced by a fixed internal safety cap.
+		if (
+			"cacheWarming" in settings &&
+			typeof settings.cacheWarming === "object" &&
+			settings.cacheWarming !== null &&
+			!Array.isArray(settings.cacheWarming)
+		) {
+			delete (settings.cacheWarming as Record<string, unknown>).maxMinutes;
 		}
 
 		// Migrate retry.maxDelayMs -> retry.provider.maxRetryDelayMs
@@ -960,13 +967,8 @@ export class SettingsManager {
 	/** Read from global settings only because warming costs money. */
 	getCacheWarming(): Required<CacheWarmingSettings> {
 		const mode = this.globalSettings.cacheWarming?.mode;
-		const maxMinutes = this.globalSettings.cacheWarming?.maxMinutes;
 		return {
-			mode: mode === "streaming" || mode === "idle" ? mode : "off",
-			maxMinutes:
-				typeof maxMinutes === "number" && Number.isFinite(maxMinutes) && maxMinutes > 0
-					? maxMinutes
-					: DEFAULT_CACHE_WARMING_MAX_MINUTES,
+			mode: mode === "off" || mode === "idle" || mode === "auto" ? mode : "streaming",
 		};
 	}
 
@@ -974,16 +976,6 @@ export class SettingsManager {
 		this.globalSettings.cacheWarming ??= {};
 		this.globalSettings.cacheWarming.mode = mode;
 		this.markModified("cacheWarming", "mode");
-		this.save();
-	}
-
-	setCacheWarmingMaxMinutes(maxMinutes: number): void {
-		if (!Number.isFinite(maxMinutes) || maxMinutes <= 0) {
-			throw new Error(`Invalid cacheWarming.maxMinutes setting: ${String(maxMinutes)}`);
-		}
-		this.globalSettings.cacheWarming ??= {};
-		this.globalSettings.cacheWarming.maxMinutes = maxMinutes;
-		this.markModified("cacheWarming", "maxMinutes");
 		this.save();
 	}
 

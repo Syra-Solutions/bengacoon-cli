@@ -11,11 +11,7 @@ import {
 	Spacer,
 	Text,
 } from "@earendil-works/pi-tui";
-import {
-	CACHE_WARMING_MAX_MINUTES_CHOICES,
-	CACHE_WARMING_MODES,
-	formatCacheWarmingMaxMinutes,
-} from "../../../core/cache-warmer.ts";
+import { CACHE_WARMING_MODES } from "../../../core/cache-warmer.ts";
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import type {
 	CacheWarmingMode,
@@ -67,7 +63,6 @@ export interface SettingsConfig {
 	transport: Transport;
 	httpIdleTimeoutMs: number;
 	cacheWarmingMode: CacheWarmingMode;
-	cacheWarmingMaxMinutes: number;
 	thinkingLevel: ThinkingLevel;
 	availableThinkingLevels: ThinkingLevel[];
 	modelThinkingLevels: Record<string, ThinkingLevel>;
@@ -108,7 +103,6 @@ export interface SettingsCallbacks {
 	onTransportChange: (transport: Transport) => void;
 	onHttpIdleTimeoutMsChange: (timeoutMs: number) => void;
 	onCacheWarmingModeChange: (mode: CacheWarmingMode) => void;
-	onCacheWarmingMaxMinutesChange: (minutes: number) => void;
 	onModelThinkingLevelChange: (provider: string, modelId: string, level: ThinkingLevel) => void;
 	onModelThinkingLevelRemove: (provider: string, modelId: string) => void;
 	onThemeChange: (theme: string) => void;
@@ -509,16 +503,9 @@ export class SettingsSelectorComponent extends Container {
 				id: "cache-warming-mode",
 				label: "Cache warming",
 				description:
-					"Refresh the prompt cache while the agent runs (streaming) or also afterwards (idle). Costs cache reads.",
+					"off; streaming while the agent runs; idle with cost-conscious continuation; auto based on session activity",
 				currentValue: config.cacheWarmingMode,
 				values: [...CACHE_WARMING_MODES],
-			},
-			{
-				id: "cache-warming-max-minutes",
-				label: "Cache warming duration",
-				description: "Stop warming this long after the last request",
-				currentValue: formatCacheWarmingMaxMinutes(config.cacheWarmingMaxMinutes),
-				values: CACHE_WARMING_MAX_MINUTES_CHOICES.map((choice) => choice.label),
 			},
 			{
 				id: "hide-thinking",
@@ -891,13 +878,6 @@ export class SettingsSelectorComponent extends Container {
 					case "cache-warming-mode":
 						callbacks.onCacheWarmingModeChange(newValue as CacheWarmingMode);
 						break;
-					case "cache-warming-max-minutes": {
-						const choice = CACHE_WARMING_MAX_MINUTES_CHOICES.find((item) => item.label === newValue);
-						if (choice) {
-							callbacks.onCacheWarmingMaxMinutesChange(choice.minutes);
-						}
-						break;
-					}
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");
 						break;

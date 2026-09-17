@@ -39,6 +39,8 @@ export {
 	type BeforeAgentStartEvent,
 	type BeforeAgentStartEventResult,
 	type BuildSystemPromptOptions,
+	type CacheWarmingDecisionEvent,
+	type CacheWarmingDecisionEventResult,
 	type ContextEvent,
 	defineTool,
 	discoverAndLoadExtensions,

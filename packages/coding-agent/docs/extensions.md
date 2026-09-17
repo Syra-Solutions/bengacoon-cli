@@ -738,6 +738,28 @@ pi.on("after_provider_response", (event, ctx) => {
 
 Header availability depends on provider and transport. Providers that abstract HTTP responses may not expose headers.
 
+#### cache_warming_decision
+
+Fired before each candidate prompt-cache refresh. The bundled policy runs first; user extensions can inspect its estimates and override the action. Prompt contents are not exposed.
+
+```typescript
+pi.on("cache_warming_decision", (event, ctx) => {
+  // event.profile: "streaming" | "idle" | "auto"
+  // event.phase: "streaming" | "idle"
+  // event.promptTokens, event.ttlMs
+  // event.costs: cacheHit, cacheMiss, missPenalty, nextWarm
+  // event.cumulativeWarmCost
+  // event.continuationProbability, event.expectedSavings
+  // event.minimumExpectedSavings, event.defaultAction
+
+  if (event.model.provider === "my-provider") {
+    return { action: "stop" };
+  }
+});
+```
+
+Return `{ action: "warm" }` or `{ action: "stop" }` to override the bundled decision. A handler may also return `continuationProbability`, `expectedSavings`, or `minimumExpectedSavings` to describe its custom policy to later handlers. The last user-extension action wins.
+
 ### Model Events
 
 #### model_select

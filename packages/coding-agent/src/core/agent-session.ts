@@ -220,7 +220,7 @@ export interface AgentSessionConfig {
 	/** Canonical model/auth runtime used by coding-agent internals. */
 	modelRuntime: ModelRuntime;
 	/** Cancelled whenever the session's context changes so a stale prompt cache is not kept warm. */
-	cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onAgentSettled" | "subscribe">;
+	cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onAgentSettled" | "recordRequestUsage" | "subscribe">;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
 	/** Optional allowlist of tool names. When provided, only these tool names are exposed. */
@@ -376,7 +376,10 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
-	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "getState" | "onAgentSettled" | "subscribe">;
+	private _cacheWarmer?: Pick<
+		CacheWarmer,
+		"cancel" | "getState" | "onAgentSettled" | "recordRequestUsage" | "subscribe"
+	>;
 	private _unsubscribeCacheWarmer?: () => void;
 
 	// Tool registry for extension getTools/setTools
@@ -722,6 +725,7 @@ export class AgentSession {
 				this._lastAssistantMessage = event.message;
 
 				const assistantMsg = event.message as AssistantMessage;
+				this._cacheWarmer?.recordRequestUsage(assistantMsg.usage);
 				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
 					this._overflowRecoveryAttempted = false;
 				}
