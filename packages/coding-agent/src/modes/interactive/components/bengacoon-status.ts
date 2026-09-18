@@ -1,5 +1,6 @@
 import { type Component, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { BengacoonStatusSnapshot } from "../../../core/bengacoon-status.ts";
+import { theme } from "../theme/theme.ts";
 import { formatTokens } from "./footer.ts";
 
 export type BengacoonStatusLayout = "sidebar" | "footer";
@@ -24,30 +25,58 @@ function wrapLogicalLines(lines: readonly string[], width: number): string[] {
 	return lines.flatMap((line) => (line === "" ? [""] : wrapTextWithAnsi(line, safeWidth)));
 }
 
-function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number): string[] {
-	const innerWidth = Math.max(1, width - 2);
-	const content = [
-		"Bengacoon",
-		"",
-		"Branch",
-		snapshot.branch ?? "Unavailable",
-		"",
-		"AI usage",
-		`Input ${formatTokens(snapshot.usage.inputTokens)}`,
-		`Output ${formatTokens(snapshot.usage.outputTokens)}`,
-		`Cost $${snapshot.usage.cost.toFixed(3)}`,
-		"",
-		"Context remaining",
-		contextRemaining(snapshot),
-		"",
-		`Jobs ${jobSummary(snapshot)}`,
-		...snapshot.jobs.details,
-		"",
-		"Available quota",
-		`Daily ${availablePercent(snapshot.quota.dailyRemainingPercent)}`,
-		`Weekly ${availablePercent(snapshot.quota.weeklyRemainingPercent)}`,
+function sidebarRow(label: string, value: string, width: number): string[] {
+	const labelColumnWidth = Math.max(8, label.length);
+	const valueWidth = Math.max(1, width - 2 - labelColumnWidth - 1);
+	const valueLines = wrapTextWithAnsi(value, valueWidth);
+	const firstPrefix = `${theme.fg("border", "│")} ${theme.fg("muted", label)}${" ".repeat(labelColumnWidth - label.length)} `;
+	const restPrefix = `${theme.fg("border", "│")} ${" ".repeat(labelColumnWidth)} `;
+	return valueLines.map((line, index) => `${index === 0 ? firstPrefix : restPrefix}${theme.fg("text", line)}`);
+}
+
+function sidebarCard(title: string, rows: readonly [label: string, value: string][], width: number): string[] {
+	return [
+		theme.fg("accent", `╭─ ${title}`),
+		...rows.flatMap(([label, value]) => sidebarRow(label, value, width)),
+		theme.fg("border", `╰${"─".repeat(Math.max(0, width - 1))}`),
 	];
-	return wrapLogicalLines(content, innerWidth).map((line) => `│ ${line}`);
+}
+
+function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number): string[] {
+	const safeWidth = Math.max(1, width);
+	return [
+		...sidebarCard("Git", [["Branch", snapshot.branch ?? "Unavailable"]], safeWidth),
+		"",
+		...sidebarCard(
+			"AI usage",
+			[
+				["Input", formatTokens(snapshot.usage.inputTokens)],
+				["Output", formatTokens(snapshot.usage.outputTokens)],
+				["Cost", `$${snapshot.usage.cost.toFixed(3)}`],
+			],
+			safeWidth,
+		),
+		"",
+		...sidebarCard("Context", [["Remaining", contextRemaining(snapshot)]], safeWidth),
+		"",
+		...sidebarCard(
+			"Jobs",
+			[
+				["Summary", jobSummary(snapshot)],
+				...snapshot.jobs.details.map((detail) => ["Detail", detail] as [string, string]),
+			],
+			safeWidth,
+		),
+		"",
+		...sidebarCard(
+			"Quota",
+			[
+				["Daily", availablePercent(snapshot.quota.dailyRemainingPercent)],
+				["Weekly", availablePercent(snapshot.quota.weeklyRemainingPercent)],
+			],
+			safeWidth,
+		),
+	];
 }
 
 function footerLines(snapshot: BengacoonStatusSnapshot, width: number): string[] {

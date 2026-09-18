@@ -2,6 +2,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { BengacoonStatusSnapshot } from "../src/core/bengacoon-status.ts";
 import { BengacoonStatusComponent } from "../src/modes/interactive/components/bengacoon-status.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 const snapshot: BengacoonStatusSnapshot = {
 	branch: "feat/responsive-bengacoon-sidebar",
@@ -18,19 +19,28 @@ const snapshot: BengacoonStatusSnapshot = {
 
 describe("Bengacoon status component", () => {
 	it("renders every snapshot section inside the 36-column sidebar", () => {
+		initTheme("cyber-coon");
 		const component = new BengacoonStatusComponent(() => snapshot, "sidebar");
 		const lines = component.render(36);
 		const text = lines.map(stripTerminalSequences).join("\n");
 
 		expect(lines.every((line) => visibleWidth(line) <= 36)).toBe(true);
-		expect(text).toContain("Branch");
-		expect(text).toContain("AI usage");
-		expect(text).toContain("Context remaining");
-		expect(text).toContain("Jobs 4 total · 1 active · 1 failed");
-		expect(text).toContain("a1b2c3d4 running");
-		expect(text).toContain("e5f6a7b8 failed");
-		expect(text).toContain("Daily 60% remaining");
-		expect(text).toContain("Weekly Unavailable");
+		expect(lines).toContain(theme.fg("accent", "╭─ Git"));
+		expect(lines.some((line) => line.includes(theme.fg("muted", "Branch")))).toBe(true);
+		expect(text).toContain("╭─ Git");
+		expect(text).toContain("│ Branch");
+		expect(text).toContain("╭─ AI usage");
+		expect(text).toContain("│ Input");
+		expect(text).toContain("╭─ Context");
+		expect(text).toContain("│ Remaining");
+		expect(text).toContain("╭─ Jobs");
+		expect(text).toContain("│ Summary  4 total · 1 active · 1");
+		expect(text).toContain("│          failed");
+		expect(text).toContain("│ Detail   a1b2c3d4 running");
+		expect(text).toContain("│ Detail   e5f6a7b8 failed");
+		expect(text).toContain("╭─ Quota");
+		expect(text).toContain("│ Daily    60% remaining");
+		expect(text).toContain("│ Weekly   Unavailable");
 	});
 
 	it("renders a readable multiline footer and skips snapshot work when hidden", () => {
