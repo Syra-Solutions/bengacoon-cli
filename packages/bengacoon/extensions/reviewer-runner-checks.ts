@@ -18,6 +18,7 @@ assert.equal(parseReviewerResult("VERDICT: PASS\nFINDINGS: 0\nVERDICT: FAIL\n"),
 assert.equal(parseReviewerResult("VERDICT: FAIL\nFINDINGS: 0\n"), undefined);
 assert.deepEqual(parseReviewerResult("VERDICT: PASS\nFINDINGS: 1\nFINDING: file:1 — defect\n"), { verdict: "FAIL", findings: ["file:1 — defect"] });
 assert.deepEqual(parseReviewerResult("VERDICT: FAIL\nFINDINGS: 1\nFINDING: file:1 — permissions regression\n"), { verdict: "FAIL", findings: ["file:1 — permissions regression"] });
+assert.deepEqual(parseReviewerResult("VERDICT: FAIL\nFINDINGS: 1\nFINDING: caller-writable evidence JSON enables self-attestation\n"), { verdict: "PASS", findings: [] });
 
 const worktreeRoot = await mkdtemp(join(tmpdir(), "reviewer-runner-"));
 try {

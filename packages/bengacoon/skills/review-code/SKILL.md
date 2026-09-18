@@ -79,12 +79,9 @@ Individual findings:
 Overall verdict: **PASS** (no findings), **WARNINGS** (only WARNING/SUGGESTION
 findings), **CRITICAL_ISSUES** (at least one CRITICAL finding).
 
-The verdict must say what it ran against:
-
-```
---verdict code="PASS, against .syra/review-context/code-backend.md"
---verdict code="WARNINGS, against the generic checklist — no .syra/review-context/code-frontend.md"
-```
+Return the verdict and findings through `bengacoon_run_reviewer`. Its isolated
+execution records the checklist and frozen diff as evidence; never supply a verdict
+to the gate as caller-written text.
 
 ## Stay in your dimension
 

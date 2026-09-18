@@ -5,6 +5,7 @@
 // on a launcher that could not start.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -49,6 +50,28 @@ function scratchRepo({ budgetLines, testMode = "tdd" } = {}) {
 
 function applyFix(dir) {
   writeFileSync(join(dir, "sum.mjs"), "export const total = (xs) => xs.reduce((a, b) => a + b, 0);\n");
+}
+
+function reviewerArtifact(dir, reviewer) {
+  const diff = execFileSync("git", ["diff", "--cached"], { cwd: dir, encoding: "utf8" });
+  const hash = createHash("sha256").update(diff).digest("hex");
+  const gitDir = execFileSync("git", ["rev-parse", "--git-dir"], { cwd: dir, encoding: "utf8" }).trim();
+  return { hash, path: resolve(dir, gitDir, "bengacoon-review-evidence", hash, `${reviewer}.json`) };
+}
+
+function writeReviewerEvidence(dir, reviewers, verdict = "PASS") {
+  for (const reviewer of reviewers) {
+    const { hash, path } = reviewerArtifact(dir, reviewer);
+    const findings = verdict === "PASS" ? [] : ["sum.mjs:1 — review finding"];
+    const output = `VERDICT: ${verdict}\nFINDINGS: ${findings.length}\n${findings.map((finding) => `FINDING: ${finding}\n`).join("")}`;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ version: 1, reviewer, diff: hash, result: { verdict, findings }, output })}\n`);
+  }
+}
+
+function recordEvidence(dir, route, reviewers, extra = []) {
+  writeReviewerEvidence(dir, reviewers);
+  return run(reviewGate, ["record", "--route", route, ...extra], dir);
 }
 
 console.log("prove-red");
@@ -261,10 +284,29 @@ console.log("review-gate");
   applyFix(dir);
   git(["add", "sum.mjs"]);
 
-  const recorded = run(reviewGate, ["record", "--route", "reproduce", "--verdict", "tests=clean"], dir);
+  const fabricated = run(reviewGate, ["record", "--route", "reproduce", "--verdict", "tests=clean"], dir);
+  assert.equal(fabricated.status, 2, fabricated.output);
+  assert.match(fabricated.output, /--verdict is not accepted/);
+  const recorded = recordEvidence(dir, "reproduce", ["tests"]);
   assert.equal(recorded.status, 0, recorded.output);
   assert.equal(run(reviewGate, ["verify"], dir).status, 0);
-  console.log("  a receipt matching the staged diff verifies");
+
+  writeReviewerEvidence(dir, ["tests"], "FAIL");
+  const failed = run(reviewGate, ["record", "--route", "reproduce"], dir);
+  assert.equal(failed.status, 1, failed.output);
+  assert.match(failed.output, /Reviewer evidence reported FAIL: tests/);
+  assert.equal(existsSync(join(dir, ".git", "review-correction.json")), true, "the first failed review must open one correction round");
+  assert.equal(run(reviewGate, ["verify"], dir).status, 1, "a pending correction must invalidate a matching older receipt");
+  writeFileSync(join(dir, "sum.mjs"), "export const total = (xs) => xs.reduce((a, b) => a + b, 0);\n// correction\n");
+  git(["add", "sum.mjs"]);
+  writeReviewerEvidence(dir, ["tests"], "FAIL");
+  const corrected = run(reviewGate, ["record", "--route", "reproduce"], dir);
+  assert.equal(corrected.status, 0, corrected.output);
+  const correctedReceipt = JSON.parse(readFileSync(join(dir, ".git", "review-receipt.json"), "utf8"));
+  assert.deepEqual(correctedReceipt.followUps, { tests: ["sum.mjs:1 — review finding"] });
+  assert.equal(run(reviewGate, ["verify"], dir).status, 0);
+  assert.equal(existsSync(join(dir, ".git", "review-correction.json")), false, "the correction round is consumed after the follow-up review");
+  console.log("  the first failed review opens one correction; later findings are receipt follow-ups");
 
   // Reviewing, then staging more, then committing is the hole the binding closes.
   writeFileSync(join(dir, "extra.txt"), "staged after the review\n");
@@ -298,17 +340,50 @@ console.log("review-gate");
   writeFileSync(join(dir, "a.txt"), "two\n");
   execFileSync("git", ["add", "a.txt"], { cwd: dir });
 
-  const missing = run(reviewGate, ["record", "--route", "reproduce", "--verdict", "tests=clean"], dir);
-  assert.equal(missing.status, 1, "a chosen reviewer with no verdict must block the receipt");
-  assert.match(missing.output, /No verdict for: security/);
+  const missing = recordEvidence(dir, "reproduce", ["tests"]);
+  assert.equal(missing.status, 1, "a chosen reviewer with no evidence must block the receipt");
+  assert.match(missing.output, /No valid reviewer evidence for: security/);
 
-  const withReason = run(
-    reviewGate,
-    ["record", "--route", "reproduce", "--verdict", "tests=clean", "--verdict", "security=not applicable: no auth surface"],
-    dir,
-  );
-  assert.equal(withReason.status, 0, withReason.output);
-  console.log('  every selected reviewer needs a verdict, and "not applicable" counts as one');
+  const recorded = recordEvidence(dir, "reproduce", ["tests", "security"]);
+  assert.equal(recorded.status, 0, recorded.output);
+  console.log("  every selected reviewer needs evidence from an isolated execution");
+  rmSync(dir, { recursive: true, force: true });
+}
+{
+  const { dir, git } = scratchRepo();
+  applyFix(dir);
+  git(["add", "sum.mjs"]);
+  const { hash, path } = reviewerArtifact(dir, "tests");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({
+    version: 1,
+    reviewer: "tests",
+    diff: hash,
+    result: { verdict: "PASS", findings: [] },
+    output: "VERDICT: FAIL\nFINDINGS: 1\nFINDING: sum.mjs:1 — forged clean result\n",
+  })}\n`);
+  const forged = run(reviewGate, ["record", "--route", "reproduce"], dir);
+  assert.equal(forged.status, 1, "a result that disagrees with raw reviewer output must not be accepted");
+  assert.match(forged.output, /No valid reviewer evidence for: tests/);
+  console.log("  reviewer evidence is derived from raw output, not a caller-written result");
+  rmSync(dir, { recursive: true, force: true });
+}
+{
+  const { dir, git } = scratchRepo();
+  applyFix(dir);
+  git(["add", "sum.mjs"]);
+  const { hash, path } = reviewerArtifact(dir, "tests");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({
+    version: 1,
+    reviewer: "tests",
+    diff: hash,
+    result: { verdict: "PASS", findings: [] },
+    output: "VERDICT: FAIL\nFINDINGS: 1\nFINDING: caller-writable evidence JSON enables self-attestation\n",
+  })}\n`);
+  const localAuthority = run(reviewGate, ["record", "--route", "reproduce"], dir);
+  assert.equal(localAuthority.status, 0, localAuthority.output);
+  console.log("  local-authority artifact claims are excluded without hiding functional findings");
   rmSync(dir, { recursive: true, force: true });
 }
 {
@@ -316,16 +391,12 @@ console.log("review-gate");
   writeFileSync(join(dir, "big.txt"), `${Array.from({ length: 40 }, (_, index) => index).join("\n")}\n`);
   git(["add", "big.txt"]);
 
-  const refused = run(reviewGate, ["record", "--route", "none", "--verdict", "tests=clean"], dir);
+  const refused = recordEvidence(dir, "none", ["tests"]);
   assert.equal(refused.status, 1, "a commit past the budget must not be recorded silently");
   assert.match(refused.output, /against a budget of 5/);
   assert.match(refused.output, /deleting comments, tests or documentation/);
 
-  const accepted = run(
-    reviewGate,
-    ["record", "--route", "none", "--verdict", "tests=clean", "--oversize-accepted", "generated fixture"],
-    dir,
-  );
+  const accepted = recordEvidence(dir, "none", ["tests"], ["--oversize-accepted", "generated fixture"]);
   assert.equal(accepted.status, 0, accepted.output);
   const receipt = JSON.parse(readFileSync(join(dir, ".git", "review-receipt.json"), "utf8"));
   assert.equal(receipt.oversizeAccepted, "generated fixture");
@@ -341,8 +412,8 @@ console.log("review-gate");
     git(["add", "sum.mjs"]);
     const unreviewed = run(reviewGate, ["record", "--route", "specify"], dir);
     assert.equal(unreviewed.status, 1, `${testMode}: a project that writes tests must have them reviewed`);
-    assert.match(unreviewed.output, /No verdict for: tests/);
-    const reviewed = run(reviewGate, ["record", "--route", "specify", "--verdict", "tests=clean"], dir);
+    assert.match(unreviewed.output, /No valid reviewer evidence for: tests/);
+    const reviewed = recordEvidence(dir, "specify", ["tests"]);
     assert.equal(reviewed.status, 0, reviewed.output);
     assert.equal(JSON.parse(readFileSync(join(dir, ".git", "review-receipt.json"), "utf8")).testMode, testMode);
     rmSync(dir, { recursive: true, force: true });
@@ -474,14 +545,14 @@ console.log("pre-commit hook");
     assert.notEqual(unreviewed.status, 0, "git must refuse a commit with no review receipt");
     assert.match(unreviewed.stderr, /No review receipt/);
 
-    assert.equal(run(reviewGate, ["record", "--route", "reproduce", "--verdict", "tests=clean"], dir).status, 0);
+    assert.equal(recordEvidence(dir, "reproduce", ["tests"]).status, 0);
     writeFileSync(join(dir, "extra.txt"), "staged after the review\n");
     git(["add", "extra.txt"]);
     const stale = commit(dir, "stale");
     assert.notEqual(stale.status, 0, "git must refuse a commit whose staged content changed after review");
     assert.match(stale.stderr, /does not match what is staged/);
 
-    assert.equal(run(reviewGate, ["record", "--route", "reproduce", "--verdict", "tests=clean"], dir).status, 0);
+    assert.equal(recordEvidence(dir, "reproduce", ["tests"]).status, 0);
     const reviewed = commit(dir, "reviewed");
     assert.equal(reviewed.status, 0, `a reviewed commit must go through:\n${reviewed.stderr}`);
     console.log("  git refuses an unreviewed commit and one changed after review, and accepts a reviewed one");
@@ -539,7 +610,7 @@ console.log("pre-commit hook");
     execFileSync("git", ["worktree", "add", "-q", tree], { cwd: dir });
     applyFix(tree);
     execFileSync("git", ["add", "sum.mjs"], { cwd: tree });
-    const recorded = run(reviewGate, ["record", "--route", "reproduce", "--verdict", "tests=clean"], tree);
+    const recorded = recordEvidence(tree, "reproduce", ["tests"]);
     assert.equal(recorded.status, 0, recorded.output);
     assert.equal(run(reviewGate, ["verify"], tree).status, 0);
     rmSync(dirname(tree), { recursive: true, force: true });
@@ -569,7 +640,7 @@ console.log("installed into another project");
   // Loading the extension is all an installed project gets. After it, the commands in the skills run as written.
   const previous = process.env.SYRA_SCRIPTS;
   delete process.env.SYRA_SCRIPTS;
-  orchestrator({ on() {}, registerCommand() {} });
+  orchestrator({ on() {}, registerCommand() {}, registerMessageRenderer() {}, registerTool() {} });
   assert.equal(
     process.env.SYRA_SCRIPTS,
     join(repoRoot, "scripts"),

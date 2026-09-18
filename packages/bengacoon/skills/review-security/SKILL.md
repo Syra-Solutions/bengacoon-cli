@@ -45,14 +45,9 @@ Read the printed file and nothing else. If the command fails for any reason othe
 than naming the layers it needs, report the failure and stop — never fall back to a
 checklist of your own choosing.
 
-**The verdict names the file it ran against.** A clean verdict against the project's
-checklist and one against the generic list are different claims, and recording them
-identically is how a receipt starts meaning less than it says:
-
-```
---verdict security="clean, against .syra/review-context/security-frontend.md"
---verdict security="clean, against the generic checklist — no .syra/review-context/security-frontend.md"
-```
+Return the verdict and findings through `bengacoon_run_reviewer`. Its isolated
+execution records the checklist and frozen diff as evidence; never supply a verdict
+to the gate as caller-written text.
 
 ## What this review cannot do
 

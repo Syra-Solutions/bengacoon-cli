@@ -79,12 +79,9 @@ inconsistency or minor structural polish).
 Overall verdict: **PASS** (no findings), **WARNINGS** (only WARNING/SUGGESTION
 findings), **CRITICAL_ISSUES** (at least one CRITICAL finding).
 
-The verdict must say what it ran against:
-
-```
---verdict architecture="PASS, against .syra/review-context/architecture-frontend.md"
---verdict architecture="WARNINGS, against the generic checklist — structure inferred from the codebase"
-```
+Return the verdict and findings through `bengacoon_run_reviewer`. Its isolated
+execution records the checklist and frozen diff as evidence; never supply a verdict
+to the gate as caller-written text.
 
 ## Stay in your dimension
 

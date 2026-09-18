@@ -2,8 +2,10 @@
 // content being committed.
 //
 //   node scripts/review-gate.mjs plan   --route reproduce
-//   node scripts/review-gate.mjs record --route reproduce --verdict tests=clean \
-//                                       --verdict security="not applicable: no auth surface"
+//   node scripts/review-gate.mjs record --route reproduce
+//
+// `record` derives its receipt from isolated reviewer artifacts; it never accepts
+// a caller-written verdict.
 //   node scripts/review-gate.mjs verify
 //
 // The receipt is bound to a hash of the staged diff. Review, then stage more, then commit, and
@@ -11,7 +13,7 @@
 // binding a review is a claim about a moment that has passed.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 // Ships with the package and is not project-configurable. A project that could edit this could
@@ -61,6 +63,73 @@ function git(args) {
 // assumed to be `.git/`, because in a worktree `.git` is a file and the directory is elsewhere.
 function receiptPath() {
   return git(["rev-parse", "--git-path", "review-receipt.json"]).trim();
+}
+
+// A failed initial review opens exactly one correction round. It is Git-local state rather than
+// a receipt: it records the transition to a changed diff, while a receipt authorizes only that
+// changed diff to commit.
+function correctionPath() {
+  return git(["rev-parse", "--git-path", "review-correction.json"]).trim();
+}
+
+function readCorrection() {
+  const path = correctionPath();
+  if (!existsSync(path)) return undefined;
+  try {
+    const correction = JSON.parse(readFileSync(path, "utf8"));
+    if (
+      correction?.version !== 1 ||
+      typeof correction.route !== "string" ||
+      !/^[a-f0-9]{64}$/.test(correction.diff) ||
+      !Array.isArray(correction.reviewers) ||
+      !correction.reviewers.every((reviewer) => typeof reviewer === "string")
+    ) throw new Error("invalid correction state");
+    return correction;
+  } catch {
+    console.error(`${path}: invalid correction state. Remove it only after inspecting the failed review.`);
+    process.exit(2);
+  }
+}
+
+function reviewerArtifactPath(diffHash, reviewer) {
+  return join(git(["rev-parse", "--git-dir"]).trim(), "bengacoon-review-evidence", diffHash, `${reviewer}.json`);
+}
+
+function parseReviewerOutput(output) {
+  const verdicts = [...String(output).matchAll(/^VERDICT:\s*(PASS|FAIL)$/gm)].map((match) => match[1]);
+  const counts = [...String(output).matchAll(/^FINDINGS:\s*(\d+)$/gm)].map((match) => match[1]);
+  const verdict = verdicts.length === 1 ? verdicts[0] : undefined;
+  const count = counts.length === 1 ? counts[0] : undefined;
+  const findings = String(output)
+    .split("\n")
+    .filter((line) => line.startsWith("FINDING: "))
+    .map((line) => line.slice("FINDING: ".length).trim())
+    .filter(Boolean);
+  if (!verdict || count === undefined || findings.length !== Number(count) || (verdict === "FAIL" && findings.length === 0)) return undefined;
+  const inScopeFindings = findings.filter((finding) => !(
+    /(?:caller|agent|same user|repository owner|local owner)[\s\S]{0,120}(?:writ|forge|fabricat|self-attest)/i.test(finding) &&
+    /artifact|evidence|receipt|json/i.test(finding)
+  ));
+  return { verdict: inScopeFindings.length > 0 ? "FAIL" : "PASS", findings: inScopeFindings };
+}
+
+function readReviewerEvidence(diffHash, reviewer) {
+  const artifact = reviewerArtifactPath(diffHash, reviewer);
+  if (!existsSync(artifact)) return undefined;
+  try {
+    const evidence = JSON.parse(readFileSync(artifact, "utf8"));
+    const parsed = parseReviewerOutput(evidence.output);
+    if (
+      evidence?.version !== 1 ||
+      evidence.reviewer !== reviewer ||
+      evidence.diff !== diffHash ||
+      !parsed ||
+      JSON.stringify(parsed) !== JSON.stringify(evidence.result)
+    ) return undefined;
+    return { artifact, ...parsed };
+  } catch {
+    return undefined;
+  }
 }
 
 // Marks a hook as this gate's own, so a later install can tell it apart from someone else's.
@@ -200,11 +269,9 @@ if (options.command === "record") {
   const staged = stagedFingerprint();
   if (!staged) { console.error("Nothing is staged, so there is nothing to record a review against."); process.exit(2); }
 
-  const verdicts = {};
-  for (const raw of options.verdicts) {
-    const at = raw.indexOf("=");
-    if (at < 1) { console.error(`--verdict expects name=outcome, got: ${raw}`); process.exit(2); }
-    verdicts[raw.slice(0, at)] = raw.slice(at + 1);
+  if (options.verdicts.length > 0) {
+    console.error("--verdict is not accepted. Run each selected reviewer and record its evidence.");
+    process.exit(2);
   }
 
   // Past the budget is not forbidden, but it cannot happen by accident. Saying so out loud is
@@ -223,13 +290,38 @@ if (options.command === "record") {
   }
 
   const { required, chosen } = planFor(options.route, config, testMode);
-  const missing = [...required, ...chosen].filter((name) => !(name in verdicts));
+  const reviewers = [...required, ...chosen];
+  const correction = readCorrection();
+  if (correction) {
+    if (correction.route !== options.route || JSON.stringify(correction.reviewers) !== JSON.stringify(reviewers)) {
+      console.error("The pending correction was reviewed under a different route or reviewer set.");
+      console.error("Resolve it with the same review plan before changing the review configuration.");
+      process.exit(1);
+    }
+    if (correction.diff === staged.hash) {
+      console.error("The first review failed and its one correction round is pending.");
+      console.error("Stage the correction, run the reviewers against the changed diff, then record again.");
+      process.exit(1);
+    }
+  }
+  const evidence = Object.fromEntries(reviewers.map((reviewer) => [reviewer, readReviewerEvidence(staged.hash, reviewer)]));
+  const missing = reviewers.filter((reviewer) => !evidence[reviewer]);
   if (missing.length > 0) {
-    console.error(`No verdict for: ${missing.join(", ")}`);
-    console.error(`Every selected reviewer needs one — "not applicable" with a reason is a verdict.`);
+    console.error(`No valid reviewer evidence for: ${missing.join(", ")}`);
+    console.error("Run each selected reviewer against the current staged diff before recording.");
+    process.exit(1);
+  }
+  const failed = reviewers.filter((reviewer) => evidence[reviewer].verdict === "FAIL");
+  if (failed.length > 0 && !correction) {
+    writeFileSync(correctionPath(), `${JSON.stringify({ version: 1, route: options.route, diff: staged.hash, reviewers }, null, 2)}\n`);
+    console.error(`Reviewer evidence reported FAIL: ${failed.join(", ")}`);
+    console.error("One correction round is now pending. Resolve these findings, rerun every reviewer against the changed diff, then record again.");
     process.exit(1);
   }
 
+  const followUps = correction && failed.length > 0
+    ? Object.fromEntries(failed.map((reviewer) => [reviewer, evidence[reviewer].findings]))
+    : undefined;
   const receipt = receiptPath();
   mkdirSync(dirname(receipt), { recursive: true });
   writeFileSync(receipt, `${JSON.stringify({
@@ -239,14 +331,22 @@ if (options.command === "record") {
     testMode,
     diff: staged.hash,
     files: staged.files,
-    verdicts,
+    reviewers: Object.fromEntries(reviewers.map((reviewer) => [reviewer, {
+      verdict: evidence[reviewer].verdict,
+      findings: evidence[reviewer].findings,
+      artifact: evidence[reviewer].artifact,
+    }])),
     lines: staged.lines,
+    ...(correction ? { correctionOf: correction.diff } : {}),
+    ...(followUps ? { followUps } : {}),
     ...(options.oversizeAccepted ? { oversizeAccepted: options.oversizeAccepted } : {}),
     at: new Date().toISOString(),
   }, null, 2)}\n`);
+  if (correction) rmSync(correctionPath(), { force: true });
   console.log(
-    `recorded ${Object.keys(verdicts).length} verdict(s) against staged diff ` +
-    `${staged.hash.slice(0, 12)} (${staged.lines} lines, budget ${config.budgetLines})`,
+    `recorded ${reviewers.length} reviewer evidence artifact(s) against staged diff ` +
+    `${staged.hash.slice(0, 12)} (${staged.lines} lines, budget ${config.budgetLines})` +
+    (followUps ? `; ${failed.length} reviewer follow-up(s) recorded without reopening correction` : ""),
   );
   process.exit(0);
 }
@@ -254,6 +354,11 @@ if (options.command === "record") {
 if (options.command === "verify") {
   const staged = stagedFingerprint();
   if (!staged) { console.log("nothing staged"); process.exit(0); }
+  if (readCorrection()) {
+    console.error("A correction round is pending, so no existing receipt can authorize this commit.");
+    console.error("Stage the correction, rerun every reviewer against the changed diff, then record again.");
+    process.exit(1);
+  }
   if (!existsSync(receiptPath())) {
     console.error("No review receipt. The reviewers for this change have not run.");
     process.exit(1);
@@ -267,7 +372,7 @@ if (options.command === "verify") {
     process.exit(1);
   }
   console.log(`receipt matches staged diff ${staged.hash.slice(0, 12)}`);
-  for (const [name, outcome] of Object.entries(receipt.verdicts)) console.log(`  ${name}: ${outcome}`);
+  for (const [name, review] of Object.entries(receipt.reviewers ?? {})) console.log(`  ${name}: ${review.verdict} (${review.findings.length} findings)`);
   process.exit(0);
 }
 

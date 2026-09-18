@@ -100,13 +100,15 @@ fail is counted as protection. Others the project **chose** once. You may add a 
 drop one the plan names. If the project has never answered, the plan says so and
 asks — ask once, write the file, continue.
 
-Run each, then record what they found. `not applicable` with a reason is a
-verdict; silence is not:
+Run each selected reviewer through `bengacoon_run_reviewer`. It launches an
+isolated read-only process with the frozen staged diff and persists its raw result.
+Then record only those artifacts:
 
 ```bash
-node "$SYRA_SCRIPTS"/review-gate.mjs record --route <route> \
-  --verdict tests=clean --verdict security="not applicable: no auth surface"
+node "$SYRA_SCRIPTS"/review-gate.mjs record --route <route>
 ```
+
+`--verdict` is refused: prose supplied by the caller is not reviewer evidence.
 
 A finding blocks only when it means the evidence is not what it claims — a check
 that does not verify the change invalidates step four, so the commit would be

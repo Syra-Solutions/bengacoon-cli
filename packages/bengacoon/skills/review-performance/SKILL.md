@@ -40,13 +40,9 @@ Read the printed file and nothing else. If the command fails for any reason othe
 than naming the layers it needs, report the failure and stop — never fall back to a
 checklist of your own choosing.
 
-**The verdict names the file it ran against**, for the same reason it does in
-`review-security`:
-
-```
---verdict performance="clean, against .syra/review-context/performance-backend.md"
---verdict performance="1 finding, against the generic checklist — no .syra/review-context/performance-backend.md"
-```
+Return the verdict and findings through `bengacoon_run_reviewer`. Its isolated
+execution records the checklist and frozen diff as evidence; never supply a verdict
+to the gate as caller-written text.
 
 ## What this review cannot do
 

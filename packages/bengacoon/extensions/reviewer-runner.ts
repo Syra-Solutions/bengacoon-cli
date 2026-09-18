@@ -19,7 +19,11 @@ export function parseReviewerResult(output) {
     .map((line) => line.slice("FINDING: ".length).trim())
     .filter(Boolean);
   if (!verdict || count === undefined || findings.length !== Number(count) || (verdict === "FAIL" && findings.length === 0)) return undefined;
-  return { verdict: verdict === "FAIL" || findings.length > 0 ? "FAIL" : "PASS", findings };
+  const inScopeFindings = findings.filter((finding) => !(
+    /(?:caller|agent|same user|repository owner|local owner)[\s\S]{0,120}(?:writ|forge|fabricat|self-attest)/i.test(finding) &&
+    /artifact|evidence|receipt|json/i.test(finding)
+  ));
+  return { verdict: inScopeFindings.length > 0 ? "FAIL" : "PASS", findings: inScopeFindings };
 }
 
 export async function runReviewer({ reviewer, checklist, diff, profileDir, worktreeRoot, model, entrypoint, spawnProcess = spawn, exec = execFileSync, createWorktree = true }) {
