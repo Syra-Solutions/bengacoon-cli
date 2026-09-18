@@ -39,7 +39,15 @@ describe("Bengacoon status snapshot", () => {
 										limits: [
 											{
 												name: "codex",
-												windows: [{ label: "5h", remainingPercent: 60, resetAt: 1_788_620_161_000 }],
+												limitReached: false,
+												windows: [
+													{
+														label: "5h",
+														usedPercent: 40,
+														remainingPercent: 60,
+														resetAt: 1_788_620_161_000,
+													},
+												],
 											},
 										],
 									}),
@@ -62,7 +70,13 @@ describe("Bengacoon status snapshot", () => {
 			},
 			quota: {
 				plan: "pro",
-				limits: [{ name: "codex", windows: [{ label: "5h", remainingPercent: 60, resetAt: 1_788_620_161_000 }] }],
+				limits: [
+					{
+						name: "codex",
+						limitReached: false,
+						windows: [{ label: "5h", usedPercent: 40, remainingPercent: 60, resetAt: 1_788_620_161_000 }],
+					},
+				],
 			},
 		});
 	});

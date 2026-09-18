@@ -49,10 +49,14 @@ export default function bengacoon(pi) {
     const quota = parseCodexQuotaHeaders(headers);
     if (!quota) return undefined;
     const windows = [
-      quota.dailyRemainingPercent === undefined ? undefined : { label: "daily", remainingPercent: quota.dailyRemainingPercent, resetAt: null },
-      quota.weeklyRemainingPercent === undefined ? undefined : { label: "week", remainingPercent: quota.weeklyRemainingPercent, resetAt: null },
+      quota.dailyRemainingPercent === undefined
+        ? undefined
+        : { label: "daily", usedPercent: 100 - quota.dailyRemainingPercent, remainingPercent: quota.dailyRemainingPercent, resetAt: null },
+      quota.weeklyRemainingPercent === undefined
+        ? undefined
+        : { label: "week", usedPercent: 100 - quota.weeklyRemainingPercent, remainingPercent: quota.weeklyRemainingPercent, resetAt: null },
     ].filter(Boolean);
-    return { plan: null, limits: windows.length > 0 ? [{ name: "codex", windows }] : [] };
+    return { plan: null, limits: windows.length > 0 ? [{ name: "codex", limitReached: false, windows }] : [] };
   };
 
   const refreshQuota = async (ctx, session) => {

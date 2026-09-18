@@ -19,9 +19,10 @@ const snapshot: BengacoonStatusSnapshot = {
 		limits: [
 			{
 				name: "codex",
+				limitReached: false,
 				windows: [
-					{ label: "5h", remainingPercent: 60, resetAt: 1_788_620_161_000 },
-					{ label: "week", remainingPercent: 20, resetAt: 1_789_206_961_000 },
+					{ label: "5h", usedPercent: 40, remainingPercent: 60, resetAt: 1_788_620_161_000 },
+					{ label: "week", usedPercent: 80, remainingPercent: 20, resetAt: 1_789_206_961_000 },
 				],
 			},
 		],

@@ -7,6 +7,7 @@ const token = `header.${Buffer.from(JSON.stringify({ "https://api.openai.com/aut
 const payload = {
 	plan_type: "pro",
 	rate_limit: {
+		limit_reached: true,
 		primary_window: { used_percent: 62, limit_window_seconds: 18_000, reset_at: 1_788_620_161 },
 		secondary_window: { used_percent: 31, limit_window_seconds: 604_800, reset_at: 1_789_206_961 },
 	},
@@ -14,6 +15,7 @@ const payload = {
 		{
 			limit_name: "codex_spark",
 			rate_limit: {
+				limit_reached: false,
 				primary_window: { used_percent: 12, limit_window_seconds: 18_000, reset_after_seconds: 18_000 },
 			},
 		},
@@ -25,14 +27,16 @@ assert.deepEqual(parseCodexQuotaResponse(payload, NOW), {
 	limits: [
 		{
 			name: "codex",
+			limitReached: true,
 			windows: [
-				{ label: "5h", remainingPercent: 38, resetAt: 1_788_620_161_000 },
-				{ label: "week", remainingPercent: 69, resetAt: 1_789_206_961_000 },
+				{ label: "5h", usedPercent: 62, remainingPercent: 38, resetAt: 1_788_620_161_000 },
+				{ label: "week", usedPercent: 31, remainingPercent: 69, resetAt: 1_789_206_961_000 },
 			],
 		},
 		{
 			name: "codex_spark",
-			windows: [{ label: "5h", remainingPercent: 88, resetAt: NOW + 18_000_000 }],
+			limitReached: false,
+			windows: [{ label: "5h", usedPercent: 12, remainingPercent: 88, resetAt: NOW + 18_000_000 }],
 		},
 	],
 });

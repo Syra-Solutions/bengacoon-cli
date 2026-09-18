@@ -24,13 +24,13 @@ function parseUsageWindow(raw, now) {
     : Number.isFinite(raw.reset_after_seconds)
       ? now + raw.reset_after_seconds * 1000
       : null;
-  return { label: usageWindowLabel(windowSeconds), remainingPercent: 100 - usedPercent, resetAt };
+  return { label: usageWindowLabel(windowSeconds), usedPercent, remainingPercent: 100 - usedPercent, resetAt };
 }
 
 function parseUsageLimit(name, raw, now) {
   if (!raw || typeof raw !== "object") return undefined;
   const windows = [parseUsageWindow(raw.primary_window, now), parseUsageWindow(raw.secondary_window, now)].filter(Boolean);
-  return windows.length > 0 ? { name, windows } : undefined;
+  return windows.length > 0 ? { name, limitReached: raw.limit_reached === true, windows } : undefined;
 }
 
 export function parseCodexQuotaResponse(payload, now) {

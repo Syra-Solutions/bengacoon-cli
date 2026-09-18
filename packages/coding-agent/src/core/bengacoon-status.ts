@@ -34,8 +34,10 @@ export interface BengacoonStatusSnapshot {
 		readonly plan: string | null;
 		readonly limits: readonly {
 			readonly name: string;
+			readonly limitReached: boolean;
 			readonly windows: readonly {
 				readonly label: string;
+				readonly usedPercent: number;
 				readonly remainingPercent: number;
 				readonly resetAt: number | null;
 			}[];
@@ -58,11 +60,25 @@ function parseQuotaUsage(value: string | undefined): BengacoonStatusSnapshot["qu
 		const parsed: unknown = JSON.parse(value);
 		if (!isRecord(parsed) || !Array.isArray(parsed.limits)) return { plan: null, limits: [] };
 		const limits = parsed.limits.flatMap((limit) => {
-			if (!isRecord(limit) || typeof limit.name !== "string" || !Array.isArray(limit.windows)) return [];
+			if (
+				!isRecord(limit) ||
+				typeof limit.name !== "string" ||
+				typeof limit.limitReached !== "boolean" ||
+				!Array.isArray(limit.windows)
+			)
+				return [];
 			const windows = limit.windows.flatMap((window) => {
-				if (!isRecord(window) || typeof window.label !== "string" || typeof window.remainingPercent !== "number")
+				if (
+					!isRecord(window) ||
+					typeof window.label !== "string" ||
+					typeof window.usedPercent !== "number" ||
+					typeof window.remainingPercent !== "number"
+				)
 					return [];
 				if (
+					!Number.isFinite(window.usedPercent) ||
+					window.usedPercent < 0 ||
+					window.usedPercent > 100 ||
 					!Number.isFinite(window.remainingPercent) ||
 					window.remainingPercent < 0 ||
 					window.remainingPercent > 100
@@ -70,9 +86,16 @@ function parseQuotaUsage(value: string | undefined): BengacoonStatusSnapshot["qu
 					return [];
 				const resetAt =
 					typeof window.resetAt === "number" && Number.isFinite(window.resetAt) ? window.resetAt : null;
-				return [{ label: window.label, remainingPercent: window.remainingPercent, resetAt }];
+				return [
+					{
+						label: window.label,
+						usedPercent: window.usedPercent,
+						remainingPercent: window.remainingPercent,
+						resetAt,
+					},
+				];
 			});
-			return windows.length > 0 ? [{ name: limit.name, windows }] : [];
+			return windows.length > 0 ? [{ name: limit.name, limitReached: limit.limitReached, windows }] : [];
 		});
 		return { plan: typeof parsed.plan === "string" ? parsed.plan : null, limits };
 	} catch {
