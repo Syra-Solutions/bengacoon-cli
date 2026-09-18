@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { formatTerminalCompletion, JobManager, validateTask } from "./jobs/runner.ts";
 import { canonicalWorktree, JobStore, resolveProfileDir } from "./jobs/storage.ts";
@@ -10,6 +11,7 @@ import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.
 import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
 import { activeDeliveryWork, headCommitDiffHash, headCommitParent, loadDeliveryState, receiptState, restoreDeliveryState, saveDeliveryState, stagedDiffHash } from "./delivery.ts";
 import { SessionChanges } from "./changes.ts";
+import { runReviewer } from "./reviewer-runner.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
 const STATUS_SIGNAL = "BENGACOON_STATUS: extension=loaded";
@@ -18,7 +20,21 @@ const WORKFLOW_NOTICE_TYPE = "bengacoon-workflow-notice";
 const CODEX_PROVIDER = "openai-codex";
 // Avoid a quota request after every turn while refreshing a continuing session promptly.
 const QUOTA_REFRESH_MS = 5 * 60_000;
-export default function bengacoon(pi) {
+const REVIEW_GATE = fileURLToPath(new URL("../scripts/review-gate.mjs", import.meta.url));
+const REVIEWERS = ["tests", "code", "architecture", "performance", "security"];
+const MAX_REVIEW_DIFF_BYTES = 64 * 1024;
+
+function hasUnstagedChanges(cwd) {
+  try {
+    execFileSync("git", ["diff", "--quiet"], { cwd, stdio: "pipe" });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+export default function bengacoon(pi, dependencies = {}) {
+  const runReviewerDependency = dependencies.runReviewer ?? runReviewer;
   let manager;
   let initialization;
   let deliverySession;
@@ -28,6 +44,7 @@ export default function bengacoon(pi) {
   let hasFetchedQuota = false;
   let knownJobStates;
   let sessionChanges = new SessionChanges();
+  let reviewerRunning = false;
 
   const deliverJobCard = (record, summary, terminal) => {
     try {
@@ -284,6 +301,45 @@ export default function bengacoon(pi) {
     const closingManager = manager;
     manager = undefined;
     if (closingManager) await closingManager.shutdown();
+  });
+
+  pi.registerTool({
+    name: "bengacoon_run_reviewer",
+    label: "Run Bengacoon Reviewer",
+    description: "Run one Bengacoon reviewer in an isolated read-only Pi process and save its evidence against the staged diff.",
+    parameters: Type.Object({ reviewer: Type.String({ enum: REVIEWERS }) }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (reviewerRunning) throw new Error("A Bengacoon reviewer is already running.");
+      reviewerRunning = true;
+      try {
+        const jobManager = await activeManager();
+        if (hasUnstagedChanges(ctx.cwd)) {
+          throw new Error("The worktree has unstaged changes. Stage the complete work unit before running a reviewer.");
+        }
+        let diff;
+        try {
+          diff = execFileSync("git", ["diff", "--cached"], {
+            cwd: ctx.cwd,
+            encoding: "utf8",
+            maxBuffer: MAX_REVIEW_DIFF_BYTES + 1,
+          });
+        } catch (error) {
+          if (error?.code === "ENOBUFS") {
+            throw new Error(`The staged diff exceeds the ${MAX_REVIEW_DIFF_BYTES / 1024} KiB reviewer limit. Split the work unit before review.`);
+          }
+          throw error;
+        }
+        if (!diff.trim()) throw new Error("Nothing is staged, so there is no diff to review.");
+        if (Buffer.byteLength(diff) > MAX_REVIEW_DIFF_BYTES) {
+          throw new Error(`The staged diff exceeds the ${MAX_REVIEW_DIFF_BYTES / 1024} KiB reviewer limit. Split the work unit before review.`);
+        }
+        const checklist = execFileSync(process.execPath, [REVIEW_GATE, "checklist", "--reviewer", params.reviewer], { cwd: ctx.cwd, encoding: "utf8" });
+        const result = await runReviewerDependency({ reviewer: params.reviewer, checklist, diff, profileDir: jobManager.profileDir, worktreeRoot: jobManager.worktreeRoot });
+        return { content: [{ type: "text", text: `${params.reviewer} reviewer completed: ${result.verdict}; ${result.findings.length} findings. Evidence: ${result.artifact}` }], details: result };
+      } finally {
+        reviewerRunning = false;
+      }
+    },
   });
 
   pi.registerTool({

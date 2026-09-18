@@ -45,7 +45,7 @@ function childPrompt(task) {
 // Exported so the conformance check can drive the exact invocation a job uses. A check that
 // rebuilt these arguments itself would drift from production and then report on a command
 // nobody runs — the guard's whole boundary rests on Pi honouring this flag set.
-export function childArguments(task, model) {
+export function childArgumentsForPrompt(prompt, model) {
   return [
     ...(typeof model === "string" && model ? ["--model", model] : []),
     "--no-extensions",
@@ -59,8 +59,12 @@ export function childArguments(task, model) {
     CHILD_GUARD_PATH,
     "--print",
     "--",
-    childPrompt(task),
+    prompt,
   ];
+}
+
+export function childArguments(task, model) {
+  return childArgumentsForPrompt(childPrompt(task), model);
 }
 
 export function childInvocation(task, model, entrypoint = process.argv[1]) {
@@ -70,6 +74,16 @@ export function childInvocation(task, model, entrypoint = process.argv[1]) {
   return {
     command: process.execPath,
     args: [entrypoint, ...childArguments(task, model)],
+  };
+}
+
+export function childInvocationForPrompt(prompt, model, entrypoint = process.argv[1]) {
+  if (typeof entrypoint !== "string" || !entrypoint) {
+    throw new Error("Unable to determine the Bengacoon CLI entrypoint for a child job.");
+  }
+  return {
+    command: process.execPath,
+    args: [entrypoint, ...childArgumentsForPrompt(prompt, model)],
   };
 }
 
