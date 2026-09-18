@@ -56,9 +56,10 @@ function contextUsageBar(snapshot: BengacoonStatusSnapshot): string {
 	return remainingPercent === null ? "Unavailable" : usageBar(100 - remainingPercent);
 }
 
-function deliveryRows(snapshot: BengacoonStatusSnapshot): [label: string, value: string][] {
+function deliveryRows(snapshot: BengacoonStatusSnapshot, collapsed: boolean): [label: string, value: string][] {
 	const delivery = snapshot.delivery;
 	if (delivery === null) return [["Status", "No active delivery unit"]];
+	if (collapsed) return [["Work", delivery.title]];
 	return [
 		["Work", delivery.title],
 		["Acceptance", delivery.criterion],
@@ -101,7 +102,7 @@ function sidebarCard(title: string, rows: readonly [label: string, value: string
 	];
 }
 
-function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number): string[] {
+function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number, deliveryCollapsed: boolean): string[] {
 	const safeWidth = Math.max(1, width);
 	return [
 		...sidebarCard(" Git", [["Branch", snapshot.branch ?? "Unavailable"]], safeWidth),
@@ -125,7 +126,7 @@ function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number): string[
 			safeWidth,
 		),
 		"",
-		...sidebarCard("▣ Delivery", deliveryRows(snapshot), safeWidth),
+		...sidebarCard("▣ Delivery", deliveryRows(snapshot, deliveryCollapsed), safeWidth),
 		"",
 		...sidebarCard(
 			"↻ Jobs",
@@ -160,6 +161,7 @@ export class BengacoonStatusComponent implements Component {
 	private readonly getSnapshot: () => BengacoonStatusSnapshot;
 	private readonly layout: BengacoonStatusLayout;
 	private readonly isVisible: () => boolean;
+	private deliveryCollapsed = false;
 
 	constructor(
 		getSnapshot: () => BengacoonStatusSnapshot,
@@ -171,10 +173,16 @@ export class BengacoonStatusComponent implements Component {
 		this.isVisible = isVisible;
 	}
 
+	toggleDeliveryCollapsed(): void {
+		this.deliveryCollapsed = !this.deliveryCollapsed;
+	}
+
 	render(width: number): string[] {
 		if (!this.isVisible()) return [];
 		const snapshot = this.getSnapshot();
-		return this.layout === "sidebar" ? sidebarLines(snapshot, width) : footerLines(snapshot, width);
+		return this.layout === "sidebar"
+			? sidebarLines(snapshot, width, this.deliveryCollapsed)
+			: footerLines(snapshot, width);
 	}
 
 	invalidate(): void {}

@@ -76,6 +76,20 @@ describe("Bengacoon status component", () => {
 		expect(text).toContain("│ Status   Limit reached");
 	});
 
+	it("collapses delivery to its active work", () => {
+		initTheme("cyber-coon");
+		const component = new BengacoonStatusComponent(() => snapshot, "sidebar");
+		component.toggleDeliveryCollapsed();
+		const text = component.render(36).map(stripTerminalSequences).join("\n");
+
+		expect(text).toContain("╭─ ▣ Delivery");
+		expect(text).toContain("│ Work     Delivery observability");
+		expect(text).not.toContain("Acceptance");
+		expect(text).not.toContain("Verify");
+		expect(text).not.toContain("Receipt");
+		expect(text).not.toContain("Next");
+	});
+
 	it("fills the context bar from used context", () => {
 		initTheme("cyber-coon");
 		const component = new BengacoonStatusComponent(

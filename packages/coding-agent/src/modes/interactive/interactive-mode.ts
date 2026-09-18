@@ -407,6 +407,7 @@ export class InteractiveMode {
 	private footer: FooterComponent;
 	private footerContainer: Container;
 	private bengacoonFooter: BengacoonStatusComponent;
+	private bengacoonSidebar: BengacoonStatusComponent;
 	private footerDataProvider: FooterDataProvider;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
@@ -583,7 +584,8 @@ export class InteractiveMode {
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
 		const getBengacoonStatus = () => createBengacoonStatusSnapshot(this.session, this.footerDataProvider);
-		this.sidebarContainer.addChild(new BengacoonStatusComponent(getBengacoonStatus, "sidebar"));
+		this.bengacoonSidebar = new BengacoonStatusComponent(getBengacoonStatus, "sidebar");
+		this.sidebarContainer.addChild(this.bengacoonSidebar);
 		this.bengacoonFooter = new BengacoonStatusComponent(getBengacoonStatus, "footer", () =>
 			shouldRenderStatusFooter(this.renderer.mode, this.renderer.terminal.columns),
 		);
@@ -2923,6 +2925,10 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.delivery.toggle", () => {
+			this.bengacoonSidebar.toggleDeliveryCollapsed();
+			this.ui.requestRender();
+		});
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
