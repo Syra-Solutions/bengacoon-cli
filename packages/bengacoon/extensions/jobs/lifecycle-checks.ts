@@ -177,6 +177,7 @@ assert.equal(typeof orchestrationRenderers.get("bengacoon-workflow-notice"), "fu
 assert.ok(orchestrationTools.has("bengacoon_report_review"));
 assert.match(orchestratorPrompt(root, ["bengacoon_report_review"]), /bengacoon_report_review/);
 assert.match(orchestratorPrompt(root, ["bengacoon_report_delivery"]), /bengacoon_report_delivery/);
+assert.match(orchestratorPrompt(root, ["bengacoon_report_delivery", "mem_search", "mem_save"]), /delivery\/current-work/);
 const originalModel = { provider: "openai", id: "gpt-5.6-sol" };
 const configuredModel = { provider: "openai", id: "gpt-5.6-terra" };
 const modelContext = {

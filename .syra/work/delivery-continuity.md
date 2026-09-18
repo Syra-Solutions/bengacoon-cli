@@ -3,7 +3,7 @@
 - [x] persist active delivery state locally
       done: after restarting a session in the same worktree, the sidebar restores the active delivery item, reported verification, and next step without requiring the workflow to report it again
 
-- [ ] mirror delivery state to Engram when available
+- [x] mirror delivery state to Engram when available
       done: when the configured Engram tools are available, the workflow stores the current delivery context under a project-scoped stable key and continues normally when they are unavailable
 
 - [ ] prevent mirrored state from authorizing delivery
