@@ -146,6 +146,7 @@ await assert.rejects(
 const orchestrationHandlers = new Map();
 const orchestrationCommands = new Map();
 const orchestrationRenderers = new Map();
+const orchestrationTools = new Map();
 const selectedModels = [];
 const selectedThinking = [];
 orchestrator({
@@ -157,6 +158,9 @@ orchestrator({
   },
   registerMessageRenderer(name, renderer) {
     orchestrationRenderers.set(name, renderer);
+  },
+  registerTool(tool) {
+    orchestrationTools.set(tool.name, tool);
   },
   async setModel(model) {
     selectedModels.push(model);
@@ -170,6 +174,7 @@ orchestrator({
   },
 });
 assert.equal(typeof orchestrationRenderers.get("bengacoon-workflow-notice"), "function");
+assert.ok(orchestrationTools.has("bengacoon_report_review"));
 const originalModel = { provider: "openai", id: "gpt-5.6-sol" };
 const configuredModel = { provider: "openai", id: "gpt-5.6-terra" };
 const modelContext = {

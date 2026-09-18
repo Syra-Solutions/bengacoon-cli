@@ -1,15 +1,22 @@
 import { execFile } from "node:child_process";
+import { Type } from "typebox";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readModelAssignments, resolveBengacoonAgentDir, skillTargetFromInput, THINKING_LEVELS, writeModelAssignments } from "./models/config.ts";
-import { WorkflowNoticeCard } from "./workflow-ui.ts";
+import { ReviewCard, WorkflowNoticeCard } from "./workflow-ui.ts";
 
 // Everything here is in the system prompt on every turn, including turns that have nothing to
 // do with changing code. That is why the rule is a pointer to the router rather than the
 // workflow itself, and why each piece is kept short.
 const ORCHESTRATOR_DIR = fileURLToPath(new URL("../orchestrator/", import.meta.url));
 const WORKFLOW_NOTICE_TYPE = "bengacoon-workflow-notice";
+const REVIEW_EVENT_TYPE = "bengacoon-review-event";
+const REVIEWERS = ["tests", "code", "architecture", "performance", "security"];
+
+function deliverReviewEvent(pi, review) {
+  pi.sendMessage({ customType: REVIEW_EVENT_TYPE, content: "", display: true, details: review }, { deliverAs: "followUp", triggerTurn: false });
+}
 
 function deliverWorkflowNotice(pi, ctx, type, message) {
   try {
@@ -97,9 +104,27 @@ export default function orchestrator(pi) {
   let pendingSkillTarget;
   let skillOverride;
 
+  pi.registerMessageRenderer(REVIEW_EVENT_TYPE, (message, { outputPad }, theme) => new ReviewCard(message.details, theme, outputPad));
   pi.registerMessageRenderer(WORKFLOW_NOTICE_TYPE, (message, { outputPad }, theme) => {
     const type = typeof message.details?.type === "string" ? message.details.type : "info";
     return new WorkflowNoticeCard(type, message.content, theme, outputPad);
+  });
+
+  pi.registerTool({
+    name: "bengacoon_report_review",
+    label: "Report Bengacoon Review",
+    description: "Render a Bengacoon reviewer start or result card in the transcript. The review gate receipt remains the commit authority.",
+    parameters: Type.Object({
+      reviewer: Type.String({ enum: REVIEWERS }),
+      state: Type.String({ enum: ["started", "completed"] }),
+      verdict: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+      findings: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 10 })),
+    }),
+    async execute(_toolCallId, params) {
+      if (params.state === "completed" && !params.verdict) throw new Error("A completed review requires a verdict.");
+      deliverReviewEvent(pi, { reviewer: params.reviewer, state: params.state, ...(params.verdict ? { verdict: params.verdict } : {}), findings: params.findings ?? [] });
+      return { content: [{ type: "text", text: `${params.reviewer} review ${params.state}.` }] };
+    },
   });
 
   // The agent's shell commands inherit this process's environment, read fresh on every command,
