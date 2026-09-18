@@ -1,6 +1,18 @@
 import { jobTitleForCategory } from "./storage.ts";
 
 const ACTIVE_STATES = new Set(["queued", "running"]);
+const TERMINAL_STATES = new Set(["completed", "failed", "cancelled", "interrupted", "termination_unconfirmed"]);
+
+export function jobStatusUpdates(records, knownStates) {
+  const updates = [];
+  for (const record of records) {
+    const previousStatus = knownStates.get(record.id);
+    knownStates.set(record.id, record.status);
+    if (previousStatus === record.status || TERMINAL_STATES.has(record.status)) continue;
+    updates.push(record);
+  }
+  return updates;
+}
 
 function shortId(id) {
   return typeof id === "string" ? id.slice(0, 8) : "unknown";

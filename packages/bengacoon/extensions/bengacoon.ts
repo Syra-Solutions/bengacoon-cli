@@ -1,8 +1,8 @@
 import { Type } from "typebox";
 import { formatTerminalCompletion, JobManager, validateTask } from "./jobs/runner.ts";
 import { canonicalWorktree, JobStore, resolveProfileDir } from "./jobs/storage.ts";
-import { formatDetail, formatList, jobStatusSnapshot, statusText } from "./jobs/format.ts";
-import { CompletionCard, JobsView } from "./jobs/ui.ts";
+import { formatDetail, formatList, jobStatusSnapshot, jobStatusUpdates, statusText } from "./jobs/format.ts";
+import { JobCard, JobsView } from "./jobs/ui.ts";
 import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.ts";
 import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
 
@@ -21,6 +21,25 @@ export default function bengacoon(pi) {
   let quotaSession;
   let quotaRefreshAt = 0;
   let hasFetchedQuota = false;
+  let knownJobStates;
+
+  const deliverJobCard = (record, summary, terminal) => {
+    try {
+      pi.sendMessage({
+        customType: "bengacoon-job-event",
+        content: summary,
+        display: true,
+        details: {
+          id: record.id,
+          category: record.category,
+          status: record.status,
+          terminal,
+        },
+      }, { deliverAs: "followUp", triggerTurn: false });
+    } catch {
+      // Transcript cards are informational and must not alter a job's persisted lifecycle.
+    }
+  };
 
   const setJobStatus = (ctx, records) => {
     const unconfirmed = records.filter((record) => record.status === "termination_unconfirmed").length;
@@ -90,25 +109,20 @@ export default function bengacoon(pi) {
       new JobStore(profileDir, worktreeRoot),
       worktreeRoot,
       profileDir,
-      (records) => setJobStatus(ctx, records),
+      (records) => {
+        setJobStatus(ctx, records);
+        if (!knownJobStates) {
+          knownJobStates = new Map(records.map((record) => [record.id, record.status]));
+          return;
+        }
+        for (const record of jobStatusUpdates(records, knownJobStates)) {
+          deliverJobCard(record, `${record.title} job ${record.id.slice(0, 8)} is ${record.status}.`, false);
+        }
+      },
       undefined,
       (record) => {
         if (deliverySession !== session) return;
-        try {
-          pi.sendMessage({
-            customType: "bengacoon-job-completion",
-            content: formatTerminalCompletion(record),
-            display: true,
-            details: {
-              id: record.id,
-              category: record.category,
-              status: record.status,
-              ...(record.finalResult ? { finalResult: record.finalResult } : {}),
-            },
-          }, { deliverAs: "followUp", triggerTurn: false });
-        } catch {
-          // Completion delivery is best-effort and must not alter the job record.
-        }
+        deliverJobCard(record, formatTerminalCompletion(record), true);
       },
       (message) => {
         if (deliverySession !== session) return;
@@ -145,9 +159,11 @@ export default function bengacoon(pi) {
     }
   };
 
-  pi.registerMessageRenderer("bengacoon-job-completion", (message, { outputPad }, theme) => {
-    const id = typeof message.details?.id === "string" ? message.details.id : undefined;
-    return new CompletionCard(message.content, theme, outputPad, async () => {
+  pi.registerMessageRenderer("bengacoon-job-event", (message, { outputPad }, theme) => {
+    const details = message.details ?? {};
+    const id = typeof details.id === "string" ? details.id : undefined;
+    const terminal = details.terminal === true;
+    return new JobCard(details, message.content, terminal, theme, outputPad, async () => {
       if (id) await showJobDetail?.(id);
     });
   });
@@ -169,6 +185,7 @@ export default function bengacoon(pi) {
     hasFetchedQuota = false;
     requestQuotaRefresh(ctx, session);
     deliverySession = session;
+    knownJobStates = undefined;
     manager = undefined;
     showJobDetail = async (id) => {
       if (deliverySession !== session || !manager) return;
@@ -199,6 +216,7 @@ export default function bengacoon(pi) {
     quotaSession = undefined;
     deliverySession = undefined;
     showJobDetail = undefined;
+    knownJobStates = undefined;
     const closingManager = manager;
     manager = undefined;
     if (closingManager) await closingManager.shutdown();

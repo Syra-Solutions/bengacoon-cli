@@ -1,20 +1,42 @@
 import { Box, Text, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { jobTitleForCategory } from "./storage.ts";
 
 export { formatDetail, formatList, statusText } from "./format.ts";
 
-export class CompletionCard {
-  constructor(content, theme, outputPad, onOpen) {
+export function jobCardText(record, summary, terminal) {
+  return [
+    `↻ ${jobTitleForCategory(record?.category)}`,
+    `Status: ${record?.status ?? "unknown"}`,
+    summary,
+    terminal ? "Click to open job details" : "Status updates appear in this transcript.",
+  ];
+}
+
+function statusColor(status) {
+  if (status === "completed") return "success";
+  if (status === "failed" || status === "cancelled" || status === "interrupted" || status === "termination_unconfirmed") return "error";
+  return "accent";
+}
+
+export class JobCard {
+  constructor(record, summary, terminal, theme, outputPad, onOpen) {
     this.onOpen = onOpen;
+    const [title, status, body, hint] = jobCardText(record, summary, terminal);
     this.box = new Box(outputPad, 1, (text) => theme.bg("customMessageBg", text));
     this.box.addChild(new Text(
-      `${theme.fg("accent", theme.bold("Bengacoon job completion"))}\n${content}\n${theme.fg("dim", "Click to open job details")}`,
+      [
+        theme.fg("accent", theme.bold(title)),
+        theme.fg(statusColor(record?.status), status),
+        theme.fg("text", body),
+        theme.fg("dim", hint),
+      ].join("\n"),
       0,
       0,
     ));
   }
 
   handleMouse(event) {
-    if (event.type !== "click" || event.button !== "left") return undefined;
+    if (!this.onOpen || event.type !== "click" || event.button !== "left") return undefined;
     void this.onOpen();
     return { handled: true, focus: false };
   }
