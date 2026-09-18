@@ -19,10 +19,17 @@ function quotaRows(snapshot: BengacoonStatusSnapshot): [label: string, value: st
 	return [
 		...(plan === null ? [] : [["Plan", plan] as [string, string]]),
 		...limits.flatMap((limit) =>
-			limit.windows.map(
-				(window) =>
-					[limit.name, `${window.label} ${availablePercent(window.remainingPercent)}`] as [string, string],
-			),
+			limit.windows.flatMap((window) => [
+				[`${limit.name} ${window.label}`, usageBar(window.usedPercent)] as [string, string],
+				["Remaining", availablePercent(window.remainingPercent)] as [string, string],
+				[
+					"Reset",
+					window.resetAt === null
+						? "Unavailable"
+						: new Date(window.resetAt).toISOString().replace("T", " ").replace(".000Z", " UTC"),
+				] as [string, string],
+				["Status", limit.limitReached ? "Limit reached" : "Available"] as [string, string],
+			]),
 		),
 	];
 }
@@ -38,12 +45,15 @@ function contextRemaining(snapshot: BengacoonStatusSnapshot): string {
 	return `${formatTokens(remainingTokens)} tokens · ${formatPercent(remainingPercent)}%`;
 }
 
+function usageBar(usedPercent: number): string {
+	const boundedPercent = Math.min(100, Math.max(0, usedPercent));
+	const filledBlocks = Math.round(boundedPercent / 10);
+	return `${theme.fg("success", "█".repeat(filledBlocks))}${theme.fg("dim", "░".repeat(10 - filledBlocks))} ${formatPercent(boundedPercent)}%`;
+}
+
 function contextUsageBar(snapshot: BengacoonStatusSnapshot): string {
 	const remainingPercent = snapshot.context.remainingPercent;
-	if (remainingPercent === null) return "Unavailable";
-	const usedPercent = Math.min(100, Math.max(0, 100 - remainingPercent));
-	const filledBlocks = Math.round(usedPercent / 10);
-	return `${theme.fg("success", "█".repeat(filledBlocks))}${theme.fg("dim", "░".repeat(10 - filledBlocks))} ${formatPercent(usedPercent)}%`;
+	return remainingPercent === null ? "Unavailable" : usageBar(100 - remainingPercent);
 }
 
 function jobSummary(snapshot: BengacoonStatusSnapshot): string {

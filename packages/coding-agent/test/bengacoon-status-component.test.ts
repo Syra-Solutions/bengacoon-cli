@@ -25,6 +25,11 @@ const snapshot: BengacoonStatusSnapshot = {
 					{ label: "week", usedPercent: 80, remainingPercent: 20, resetAt: 1_789_206_961_000 },
 				],
 			},
+			{
+				name: "codex_spark",
+				limitReached: true,
+				windows: [{ label: "5h", usedPercent: 100, remainingPercent: 0, resetAt: 1_788_620_161_000 }],
+			},
 		],
 	},
 };
@@ -52,8 +57,12 @@ describe("Bengacoon status component", () => {
 		expect(text).toContain("│ Detail   e5f6a7b8 failed");
 		expect(text).toContain("╭─ ◐ Quota");
 		expect(text).toContain("│ Plan     pro");
-		expect(text).toContain("│ codex    5h 60% remaining");
-		expect(text).toContain("│ codex    week 20% remaining");
+		expect(text).toContain("│ codex 5h ████░░░░░░ 40%");
+		expect(text).toContain("│ Remaining 60% remaining");
+		expect(text).toContain("│ Reset    2026-09-05 14:56:01 UTC");
+		expect(text).toContain("│ Status   Available");
+		expect(text).toContain("│ codex_spark 5h ██████████ 100%");
+		expect(text).toContain("│ Status   Limit reached");
 	});
 
 	it("fills the context bar from used context", () => {
