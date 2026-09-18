@@ -8,7 +8,7 @@ import { GUARD_BLOCKED_MARKER, isGuardedPathInsideRoot } from "./child-guard.ts"
 import { isSameOrDescendant, normalizeRecord, normalizeRecords, resolveProfileDir } from "./storage.ts";
 import { MODEL_ASSIGNMENTS_FILE, readModelAssignments, resolveBengacoonAgentDir, resolveModelAssignment, skillTargetFromInput, writeModelAssignments } from "../models/config.ts";
 import { formatDetail, statusText } from "./format.ts";
-import orchestrator, { contextStoreAdapter } from "../orchestrator.ts";
+import orchestrator, { contextStoreAdapter, orchestratorPrompt } from "../orchestrator.ts";
 import { parseCodexQuotaHeaders } from "../quota.ts";
 
 class MemoryStore {
@@ -175,6 +175,7 @@ orchestrator({
 });
 assert.equal(typeof orchestrationRenderers.get("bengacoon-workflow-notice"), "function");
 assert.ok(orchestrationTools.has("bengacoon_report_review"));
+assert.match(orchestratorPrompt(root, ["bengacoon_report_review"]), /bengacoon_report_review/);
 const originalModel = { provider: "openai", id: "gpt-5.6-sol" };
 const configuredModel = { provider: "openai", id: "gpt-5.6-terra" };
 const modelContext = {
