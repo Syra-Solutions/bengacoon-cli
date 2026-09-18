@@ -30,7 +30,22 @@ describe("Bengacoon status snapshot", () => {
 								lines: ["a1b2c3d4 running Repository exploration", "e5f6a7b8 failed Repository verification"],
 							},
 						],
-						["bengacoon-quota", { values: { dailyRemainingPercent: "60", weeklyRemainingPercent: "20" } }],
+						[
+							"bengacoon-quota",
+							{
+								values: {
+									usage: JSON.stringify({
+										plan: "pro",
+										limits: [
+											{
+												name: "codex",
+												windows: [{ label: "5h", remainingPercent: 60, resetAt: 1_788_620_161_000 }],
+											},
+										],
+									}),
+								},
+							},
+						],
 					]),
 			},
 		);
@@ -45,7 +60,10 @@ describe("Bengacoon status snapshot", () => {
 				failed: 1,
 				details: ["a1b2c3d4 running Repository exploration", "e5f6a7b8 failed Repository verification"],
 			},
-			quota: { dailyRemainingPercent: 60, weeklyRemainingPercent: 20 },
+			quota: {
+				plan: "pro",
+				limits: [{ name: "codex", windows: [{ label: "5h", remainingPercent: 60, resetAt: 1_788_620_161_000 }] }],
+			},
 		});
 	});
 
@@ -72,6 +90,6 @@ describe("Bengacoon status snapshot", () => {
 		);
 
 		expect(snapshot.context).toEqual({ remainingTokens: null, remainingPercent: null });
-		expect(snapshot.quota).toEqual({ dailyRemainingPercent: null, weeklyRemainingPercent: null });
+		expect(snapshot.quota).toEqual({ plan: null, limits: [] });
 	});
 });

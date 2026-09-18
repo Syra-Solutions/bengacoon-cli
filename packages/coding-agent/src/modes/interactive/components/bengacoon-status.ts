@@ -9,8 +9,27 @@ function formatPercent(value: number): string {
 	return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
-function availablePercent(value: number | null): string {
-	return value === null ? "Unavailable" : `${formatPercent(value)}% remaining`;
+function availablePercent(value: number): string {
+	return `${formatPercent(value)}% remaining`;
+}
+
+function quotaRows(snapshot: BengacoonStatusSnapshot): [label: string, value: string][] {
+	const { plan, limits } = snapshot.quota;
+	if (limits.length === 0) return [["Usage", "Unavailable"]];
+	return [
+		...(plan === null ? [] : [["Plan", plan] as [string, string]]),
+		...limits.flatMap((limit) =>
+			limit.windows.map(
+				(window) =>
+					[limit.name, `${window.label} ${availablePercent(window.remainingPercent)}`] as [string, string],
+			),
+		),
+	];
+}
+
+function quotaSummary(snapshot: BengacoonStatusSnapshot): string {
+	const rows = quotaRows(snapshot);
+	return rows.map(([label, value]) => `${label} ${value}`).join(" · ");
 }
 
 function contextRemaining(snapshot: BengacoonStatusSnapshot): string {
@@ -86,14 +105,7 @@ function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number): string[
 			safeWidth,
 		),
 		"",
-		...sidebarCard(
-			"◐ Quota",
-			[
-				["Daily", availablePercent(snapshot.quota.dailyRemainingPercent)],
-				["Weekly", availablePercent(snapshot.quota.weeklyRemainingPercent)],
-			],
-			safeWidth,
-		),
+		...sidebarCard("◐ Quota", quotaRows(snapshot), safeWidth),
 	];
 }
 
@@ -106,7 +118,7 @@ function footerLines(snapshot: BengacoonStatusSnapshot, width: number): string[]
 			`Context: ${contextRemaining(snapshot)} remaining`,
 			`Jobs: ${jobSummary(snapshot)}`,
 			...details,
-			`Quota: daily ${availablePercent(snapshot.quota.dailyRemainingPercent)} · weekly ${availablePercent(snapshot.quota.weeklyRemainingPercent)}`,
+			`Quota: ${quotaSummary(snapshot)}`,
 		],
 		width,
 	);

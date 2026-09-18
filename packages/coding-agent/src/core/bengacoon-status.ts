@@ -31,8 +31,15 @@ export interface BengacoonStatusSnapshot {
 		readonly details: readonly string[];
 	};
 	readonly quota: {
-		readonly dailyRemainingPercent: number | null;
-		readonly weeklyRemainingPercent: number | null;
+		readonly plan: string | null;
+		readonly limits: readonly {
+			readonly name: string;
+			readonly windows: readonly {
+				readonly label: string;
+				readonly remainingPercent: number;
+				readonly resetAt: number | null;
+			}[];
+		}[];
 	};
 }
 
@@ -41,9 +48,36 @@ function parseNonNegativeInteger(value: string | undefined): number {
 	return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
-function parsePercent(value: string | undefined): number | null {
-	const parsed = Number(value);
-	return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : null;
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function parseQuotaUsage(value: string | undefined): BengacoonStatusSnapshot["quota"] {
+	if (!value) return { plan: null, limits: [] };
+	try {
+		const parsed: unknown = JSON.parse(value);
+		if (!isRecord(parsed) || !Array.isArray(parsed.limits)) return { plan: null, limits: [] };
+		const limits = parsed.limits.flatMap((limit) => {
+			if (!isRecord(limit) || typeof limit.name !== "string" || !Array.isArray(limit.windows)) return [];
+			const windows = limit.windows.flatMap((window) => {
+				if (!isRecord(window) || typeof window.label !== "string" || typeof window.remainingPercent !== "number")
+					return [];
+				if (
+					!Number.isFinite(window.remainingPercent) ||
+					window.remainingPercent < 0 ||
+					window.remainingPercent > 100
+				)
+					return [];
+				const resetAt =
+					typeof window.resetAt === "number" && Number.isFinite(window.resetAt) ? window.resetAt : null;
+				return [{ label: window.label, remainingPercent: window.remainingPercent, resetAt }];
+			});
+			return windows.length > 0 ? [{ name: limit.name, windows }] : [];
+		});
+		return { plan: typeof parsed.plan === "string" ? parsed.plan : null, limits };
+	} catch {
+		return { plan: null, limits: [] };
+	}
 }
 
 export function createBengacoonStatusSnapshot(
@@ -76,9 +110,6 @@ export function createBengacoonStatusSnapshot(
 			failed: parseNonNegativeInteger(jobMetadata?.values?.failed),
 			details: [...(jobMetadata?.lines ?? [])],
 		},
-		quota: {
-			dailyRemainingPercent: parsePercent(quotaMetadata?.values?.dailyRemainingPercent),
-			weeklyRemainingPercent: parsePercent(quotaMetadata?.values?.weeklyRemainingPercent),
-		},
+		quota: parseQuotaUsage(quotaMetadata?.values?.usage),
 	};
 }

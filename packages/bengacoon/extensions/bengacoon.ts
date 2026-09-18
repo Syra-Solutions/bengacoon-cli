@@ -4,16 +4,23 @@ import { canonicalWorktree, JobStore, resolveProfileDir } from "./jobs/storage.t
 import { formatDetail, formatList, jobStatusSnapshot, statusText } from "./jobs/format.ts";
 import { CompletionCard, JobsView } from "./jobs/ui.ts";
 import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.ts";
-import { parseCodexQuotaHeaders } from "./quota.ts";
+import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
 const STATUS_SIGNAL = "BENGACOON_STATUS: extension=loaded";
+// This must match the model registry provider that owns the Codex OAuth token.
+const CODEX_PROVIDER = "openai-codex";
+// Avoid a quota request after every turn while refreshing a continuing session promptly.
+const QUOTA_REFRESH_MS = 5 * 60_000;
 
 export default function bengacoon(pi) {
   let manager;
   let initialization;
   let deliverySession;
   let showJobDetail;
+  let quotaSession;
+  let quotaRefreshAt = 0;
+  let hasFetchedQuota = false;
 
   const setJobStatus = (ctx, records) => {
     const unconfirmed = records.filter((record) => record.status === "termination_unconfirmed").length;
@@ -30,18 +37,42 @@ export default function bengacoon(pi) {
   };
 
   const setQuotaStatus = (ctx, quota) => {
-    const daily = quota?.dailyRemainingPercent;
-    const weekly = quota?.weeklyRemainingPercent;
-    ctx.ui.setStatus(
-      "bengacoon-quota",
-      `quota: daily ${daily === undefined ? "Unavailable" : `${daily}% remaining`}, weekly ${weekly === undefined ? "Unavailable" : `${weekly}% remaining`}`,
-      {
-        values: {
-          ...(daily === undefined ? {} : { dailyRemainingPercent: String(daily) }),
-          ...(weekly === undefined ? {} : { weeklyRemainingPercent: String(weekly) }),
-        },
-      },
-    );
+    const summary = quota?.limits
+      .flatMap((limit) => limit.windows.map((window) => `${limit.name} ${window.label} ${window.remainingPercent}% remaining`))
+      .join(", ");
+    ctx.ui.setStatus("bengacoon-quota", summary ? `quota: ${summary}` : "quota: unavailable", {
+      values: quota ? { usage: JSON.stringify(quota) } : {},
+    });
+  };
+
+  const quotaFromHeaders = (headers) => {
+    const quota = parseCodexQuotaHeaders(headers);
+    if (!quota) return undefined;
+    const windows = [
+      quota.dailyRemainingPercent === undefined ? undefined : { label: "daily", remainingPercent: quota.dailyRemainingPercent, resetAt: null },
+      quota.weeklyRemainingPercent === undefined ? undefined : { label: "week", remainingPercent: quota.weeklyRemainingPercent, resetAt: null },
+    ].filter(Boolean);
+    return { plan: null, limits: windows.length > 0 ? [{ name: "codex", windows }] : [] };
+  };
+
+  const refreshQuota = async (ctx, session) => {
+    if (ctx.model?.provider !== CODEX_PROVIDER) return;
+    const now = Date.now();
+    if (now - quotaRefreshAt < QUOTA_REFRESH_MS) return;
+    quotaRefreshAt = now;
+    // Authentication failure only makes an optional quota refresh unavailable.
+    const token = await ctx.modelRegistry.getApiKeyForProvider(CODEX_PROVIDER).catch(() => undefined);
+    const quota = await fetchCodexQuota(token, fetch, Date.now());
+    if (quota && quotaSession === session) {
+      hasFetchedQuota = quota.limits.length > 0;
+      setQuotaStatus(ctx, quota);
+    }
+  };
+
+  const requestQuotaRefresh = (ctx, session) => {
+    void refreshQuota(ctx, session).catch(() => {
+      // Quota display must never interrupt a provider response or session startup.
+    });
   };
 
   const initialize = async (ctx, session) => {
@@ -118,13 +149,21 @@ export default function bengacoon(pi) {
   });
 
   pi.on("after_provider_response", (event, ctx) => {
-    const quota = parseCodexQuotaHeaders(event.headers);
-    if (quota) setQuotaStatus(ctx, quota);
+    if (ctx.model?.provider !== CODEX_PROVIDER) return;
+    if (!hasFetchedQuota) {
+      const quota = quotaFromHeaders(event.headers);
+      if (quota) setQuotaStatus(ctx, quota);
+    }
+    requestQuotaRefresh(ctx, quotaSession);
   });
 
   pi.on("session_start", async (_event, ctx) => {
     setQuotaStatus(ctx, undefined);
     const session = Symbol("bengacoon-job-delivery");
+    quotaSession = session;
+    quotaRefreshAt = 0;
+    hasFetchedQuota = false;
+    requestQuotaRefresh(ctx, session);
     deliverySession = session;
     manager = undefined;
     showJobDetail = async (id) => {
@@ -153,6 +192,7 @@ export default function bengacoon(pi) {
   });
 
   pi.on("session_shutdown", async () => {
+    quotaSession = undefined;
     deliverySession = undefined;
     showJobDetail = undefined;
     const closingManager = manager;

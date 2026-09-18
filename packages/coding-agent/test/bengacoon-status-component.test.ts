@@ -14,7 +14,18 @@ const snapshot: BengacoonStatusSnapshot = {
 		failed: 1,
 		details: ["a1b2c3d4 running Repository exploration", "e5f6a7b8 failed Repository verification"],
 	},
-	quota: { dailyRemainingPercent: 60, weeklyRemainingPercent: null },
+	quota: {
+		plan: "pro",
+		limits: [
+			{
+				name: "codex",
+				windows: [
+					{ label: "5h", remainingPercent: 60, resetAt: 1_788_620_161_000 },
+					{ label: "week", remainingPercent: 20, resetAt: 1_789_206_961_000 },
+				],
+			},
+		],
+	},
 };
 
 describe("Bengacoon status component", () => {
@@ -39,8 +50,9 @@ describe("Bengacoon status component", () => {
 		expect(text).toContain("│ Detail   a1b2c3d4 running");
 		expect(text).toContain("│ Detail   e5f6a7b8 failed");
 		expect(text).toContain("╭─ ◐ Quota");
-		expect(text).toContain("│ Daily    60% remaining");
-		expect(text).toContain("│ Weekly   Unavailable");
+		expect(text).toContain("│ Plan     pro");
+		expect(text).toContain("│ codex    5h 60% remaining");
+		expect(text).toContain("│ codex    week 20% remaining");
 	});
 
 	it("fills the context bar from used context", () => {
