@@ -111,8 +111,8 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 			noTools: "builtin",
 		});
 
-		expect(session.getActiveToolNames()).toEqual([]);
-		expect(session.systemPrompt).toContain("<tools>\n(none)\n");
+		expect(session.getActiveToolNames()).toEqual(["bengacoon_start_job"]);
+		expect(session.systemPrompt).toContain("- bengacoon_start_job:");
 		expect(session.systemPrompt).not.toContain("- read:");
 		session.dispose();
 	});
