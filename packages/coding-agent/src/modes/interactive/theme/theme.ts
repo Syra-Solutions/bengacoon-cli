@@ -406,9 +406,11 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 		const themesDir = getThemesDir();
 		const darkPath = path.join(themesDir, "dark.json");
 		const lightPath = path.join(themesDir, "light.json");
+		const cyberCoonPath = path.join(themesDir, "cyber-coon.json");
 		BUILTIN_THEMES = {
 			dark: JSON.parse(stripBom(fs.readFileSync(darkPath, "utf-8"))) as ThemeJson,
 			light: JSON.parse(stripBom(fs.readFileSync(lightPath, "utf-8"))) as ThemeJson,
+			"cyber-coon": JSON.parse(stripBom(fs.readFileSync(cyberCoonPath, "utf-8"))) as ThemeJson,
 		};
 	}
 	return BUILTIN_THEMES;
@@ -729,7 +731,7 @@ export async function detectTerminalThemeForAuto({
 }
 
 export function getDefaultTheme(): string {
-	return detectTerminalBackgroundFromEnv().theme;
+	return "cyber-coon";
 }
 
 // ============================================================================

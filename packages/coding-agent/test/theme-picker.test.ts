@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
+	getDefaultTheme,
+	getResolvedThemeColors,
+	getThemeByName,
 	setRegisteredThemes,
 } from "../src/modes/interactive/theme/theme.ts";
 
@@ -29,6 +32,13 @@ describe("theme picker", () => {
 		setRegisteredThemes([]);
 		rmSync(tempRoot, { recursive: true, force: true });
 		vi.unstubAllEnvs();
+	});
+
+	it("ships cyber-coon as the green default theme", () => {
+		expect(getAvailableThemes()).toContain("cyber-coon");
+		expect(getDefaultTheme()).toBe("cyber-coon");
+		expect(getThemeByName("cyber-coon")?.name).toBe("cyber-coon");
+		expect(getResolvedThemeColors("cyber-coon").accent).toBe("#74f6a3");
 	});
 
 	it("uses custom theme content names instead of file names", () => {
