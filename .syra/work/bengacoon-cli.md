@@ -12,5 +12,5 @@
 - [x] provide the Bengacoon status snapshot
       done: one snapshot reports Git branch, session input/output tokens and cost, remaining context, job totals plus active/failed job details, and daily/weekly Codex quota when response headers provide it or `Unavailable` otherwise
 
-- [ ] render the status responsively
+- [x] render the status responsively
       done: the snapshot renders in the 36-column sidebar at 120 columns or wider and as a readable multi-line footer below 120 columns, updating when branch, jobs, usage, context, or available quota changes

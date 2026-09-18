@@ -58,6 +58,7 @@ import {
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
+import { createBengacoonStatusSnapshot } from "../../core/bengacoon-status.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -116,10 +117,11 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
-import { createChatViewport } from "./chat-viewport.ts";
+import { createChatViewport, shouldRenderStatusFooter } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
+import { BengacoonStatusComponent } from "./components/bengacoon-status.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
@@ -404,6 +406,7 @@ export class InteractiveMode {
 	private activeSelectorDispose?: () => void;
 	private footer: FooterComponent;
 	private footerContainer: Container;
+	private bengacoonFooter: BengacoonStatusComponent;
 	private footerDataProvider: FooterDataProvider;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
@@ -575,10 +578,16 @@ export class InteractiveMode {
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
-		this.footer = new FooterComponent(this.session, this.footerDataProvider);
+		this.footer = new FooterComponent(this.session, this.footerDataProvider, ["bengacoon-jobs", "bengacoon-quota"]);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
+		const getBengacoonStatus = () => createBengacoonStatusSnapshot(this.session, this.footerDataProvider);
+		this.sidebarContainer.addChild(new BengacoonStatusComponent(getBengacoonStatus, "sidebar"));
+		this.bengacoonFooter = new BengacoonStatusComponent(getBengacoonStatus, "footer", () =>
+			shouldRenderStatusFooter(this.renderer.mode, this.renderer.terminal.columns),
+		);
+		this.footerContainer.addChild(this.bengacoonFooter);
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -2343,6 +2352,7 @@ export class InteractiveMode {
 			this.customFooter = undefined;
 			this.footerContainer.addChild(this.footer);
 		}
+		this.footerContainer.addChild(this.bengacoonFooter);
 
 		this.ui.requestRender();
 	}

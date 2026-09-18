@@ -3,6 +3,10 @@ import { type Component, HStack, ScrollView, type ScrollViewScrollbar, VStack } 
 export const SIDEBAR_BREAKPOINT = 120;
 export const SIDEBAR_WIDTH = 36;
 
+export function shouldRenderStatusFooter(mode: "regular" | "fullscreen", terminalWidth: number): boolean {
+	return mode === "regular" || terminalWidth < SIDEBAR_BREAKPOINT;
+}
+
 export interface ChatViewportOptions {
 	readonly document: Component;
 	readonly pendingMessages: Component;

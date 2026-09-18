@@ -87,10 +87,13 @@ function createSession(options: {
 	return session as unknown as AgentSession;
 }
 
-function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
+function createFooterData(
+	providerCount: number,
+	extensionStatuses: ReadonlyMap<string, string> = new Map(),
+): ReadonlyFooterDataProvider {
 	const provider = {
 		getGitBranch: () => "main",
-		getExtensionStatuses: () => new Map<string, string>(),
+		getExtensionStatuses: () => extensionStatuses,
 		getExtensionStatusMetadata: () => new Map(),
 		getAvailableProviderCount: () => providerCount,
 		onBranchChange: (callback: () => void) => {
@@ -230,6 +233,21 @@ describe("FooterComponent width handling", () => {
 		const footer = new FooterComponent(session, createFooterData(1));
 
 		expect(stripAnsi(footer.render(120)[1])).toContain("$0.000 (sub)");
+	});
+
+	it("hides dedicated Bengacoon statuses while retaining other extension statuses", () => {
+		const session = createSession({ sessionName: "" });
+		const statuses = new Map([
+			["bengacoon-jobs", "jobs: 1 active"],
+			["bengacoon-quota", "quota: daily 60% remaining"],
+			["other", "other: ready"],
+		]);
+		const footer = new FooterComponent(session, createFooterData(1, statuses), ["bengacoon-jobs", "bengacoon-quota"]);
+		const rendered = footer.render(120).map(stripAnsi).join("\n");
+
+		expect(rendered).toContain("other: ready");
+		expect(rendered).not.toContain("jobs: 1 active");
+		expect(rendered).not.toContain("quota: daily");
 	});
 
 	it("does not mark generic OAuth sign-in as a subscription", () => {

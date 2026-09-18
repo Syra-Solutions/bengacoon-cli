@@ -1,6 +1,6 @@
 import { type Component, Container, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
-import { createChatViewport } from "../src/modes/interactive/chat-viewport.ts";
+import { createChatViewport, shouldRenderStatusFooter } from "../src/modes/interactive/chat-viewport.ts";
 
 function widthProbe(label: string): Component {
 	return {
@@ -29,6 +29,12 @@ describe("chat viewport", () => {
 
 		expect(automatic.transcript.scrollbar).toBe("auto");
 		expect(hidden.transcript.scrollbar).toBe("hidden");
+	});
+
+	test("uses the footer below the fullscreen breakpoint and in regular mode", () => {
+		expect(shouldRenderStatusFooter("fullscreen", 119)).toBe(true);
+		expect(shouldRenderStatusFooter("fullscreen", 120)).toBe(false);
+		expect(shouldRenderStatusFooter("regular", 120)).toBe(true);
 	});
 
 	test("reserves a 36-column sidebar at 120 columns and restores chat width below it", () => {
