@@ -1,13 +1,19 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { delimiter, join } from "path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
+	APP_NAME,
+	APP_TITLE,
+	CONFIG_DIR_NAME,
 	detectInstallMethod,
+	ENV_AGENT_DIR,
 	findNodePackageDir,
+	getAgentDir,
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
 	getUpdateInstruction,
+	PACKAGE_NAME,
 } from "../src/config.ts";
 
 const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath");
@@ -145,6 +151,17 @@ function createFakeBunScript(bunBin: string): string {
 	const escapedBunBin = bunBin.replaceAll("'", "'\\''");
 	return `#!/bin/sh\nif [ "$1" = "pm" ] && [ "$2" = "bin" ] && [ "$3" = "-g" ]; then\n\tprintf '%s\\n' '${escapedBunBin}'\n\texit 0\nfi\nexit 1\n`;
 }
+
+describe("Bengacoon identity", () => {
+	test("uses the Bengacoon command and an isolated profile", () => {
+		expect(PACKAGE_NAME).toBe("bengacoon-cli");
+		expect(APP_NAME).toBe("bengacoon");
+		expect(APP_TITLE).toBe("bengacoon");
+		expect(CONFIG_DIR_NAME).toBe(".bengacoon");
+		expect(ENV_AGENT_DIR).toBe("BENGACOON_CODING_AGENT_DIR");
+		expect(getAgentDir()).toBe(join(homedir(), ".bengacoon", "agent"));
+	});
+});
 
 describe("findNodePackageDir", () => {
 	test("skips binary metadata copied into dist", () => {

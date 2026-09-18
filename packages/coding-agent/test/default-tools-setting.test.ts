@@ -152,8 +152,8 @@ describe("defaultTools setting", () => {
 				.getAllTools()
 				.map((tool) => tool.name)
 				.sort(),
-		).toEqual(["bash", "edit", "find", "grep", "ls", "powershell", "read", "write"]);
-		expect(session.getActiveToolNames()).toEqual(["ls"]);
+		).toEqual(["bash", "bengacoon_start_job", "edit", "find", "grep", "ls", "powershell", "read", "write"]);
+		expect(session.getActiveToolNames()).toEqual(["ls", "bengacoon_start_job"]);
 		session.dispose();
 	});
 });

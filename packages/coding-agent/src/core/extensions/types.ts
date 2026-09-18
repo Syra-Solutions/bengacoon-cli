@@ -50,7 +50,7 @@ import type { BashResult } from "../bash-executor.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
 import type { EventBus } from "../event-bus.ts";
 import type { ExecOptions, ExecResult } from "../exec.ts";
-import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
+import type { ExtensionStatusMetadata, ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
 import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
@@ -146,8 +146,8 @@ export interface ExtensionUIContext {
 	/** Listen to raw terminal input (interactive mode only). Returns an unsubscribe function. */
 	onTerminalInput(handler: TerminalInputHandler): () => void;
 
-	/** Set status text in the footer/status bar. Pass undefined to clear. */
-	setStatus(key: string, text: string | undefined): void;
+	/** Set status text and optional structured metadata. Pass undefined text to clear both. */
+	setStatus(key: string, text: string | undefined, metadata?: ExtensionStatusMetadata): void;
 
 	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
 	setWorkingMessage(message?: string): void;

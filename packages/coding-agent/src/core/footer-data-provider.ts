@@ -3,6 +3,11 @@ import { existsSync, type FSWatcher, readFileSync, type Stats, statSync, unwatch
 import { dirname, join, resolve } from "path";
 import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "../utils/fs-watch.ts";
 
+export interface ExtensionStatusMetadata {
+	readonly lines?: readonly string[];
+	readonly values?: Readonly<Record<string, string>>;
+}
+
 export type GitPaths = {
 	repoDir: string;
 	commonGitDir: string;
@@ -101,6 +106,7 @@ export class FooterDataProvider {
 	private static readonly WATCH_DEBOUNCE_MS = 500;
 
 	private extensionStatuses = new Map<string, string>();
+	private extensionStatusMetadata = new Map<string, ExtensionStatusMetadata>();
 	private cachedBranch: string | null | undefined = undefined;
 	private gitPaths: GitPaths | null | undefined = undefined;
 	private headWatcher: FSWatcher | null = null;
@@ -136,6 +142,11 @@ export class FooterDataProvider {
 		return this.extensionStatuses;
 	}
 
+	/** Structured extension status metadata for richer built-in displays. */
+	getExtensionStatusMetadata(): ReadonlyMap<string, ExtensionStatusMetadata> {
+		return this.extensionStatusMetadata;
+	}
+
 	/** Subscribe to git branch changes. Returns unsubscribe function. */
 	onBranchChange(callback: () => void): () => void {
 		this.branchChangeCallbacks.add(callback);
@@ -143,17 +154,27 @@ export class FooterDataProvider {
 	}
 
 	/** Internal: set extension status */
-	setExtensionStatus(key: string, text: string | undefined): void {
+	setExtensionStatus(key: string, text: string | undefined, metadata?: ExtensionStatusMetadata): void {
 		if (text === undefined) {
 			this.extensionStatuses.delete(key);
+			this.extensionStatusMetadata.delete(key);
+			return;
+		}
+		this.extensionStatuses.set(key, text);
+		if (metadata) {
+			this.extensionStatusMetadata.set(key, {
+				...(metadata.lines ? { lines: [...metadata.lines] } : {}),
+				...(metadata.values ? { values: { ...metadata.values } } : {}),
+			});
 		} else {
-			this.extensionStatuses.set(key, text);
+			this.extensionStatusMetadata.delete(key);
 		}
 	}
 
 	/** Internal: clear extension statuses */
 	clearExtensionStatuses(): void {
 		this.extensionStatuses.clear();
+		this.extensionStatusMetadata.clear();
 	}
 
 	/** Number of unique providers with available models (for footer display) */
@@ -384,5 +405,9 @@ export class FooterDataProvider {
 /** Read-only view for extensions - excludes setExtensionStatus, setAvailableProviderCount and dispose */
 export type ReadonlyFooterDataProvider = Pick<
 	FooterDataProvider,
-	"getGitBranch" | "getExtensionStatuses" | "getAvailableProviderCount" | "onBranchChange"
+	| "getGitBranch"
+	| "getExtensionStatuses"
+	| "getExtensionStatusMetadata"
+	| "getAvailableProviderCount"
+	| "onBranchChange"
 >;

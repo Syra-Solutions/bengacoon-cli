@@ -58,6 +58,7 @@ import {
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
+import { createBengacoonStatusSnapshot } from "../../core/bengacoon-status.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -80,7 +81,11 @@ import type {
 	UserBashEventResult,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
-import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
+import {
+	type ExtensionStatusMetadata,
+	FooterDataProvider,
+	type ReadonlyFooterDataProvider,
+} from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
@@ -112,10 +117,11 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
-import { createChatViewport } from "./chat-viewport.ts";
+import { createChatViewport, shouldRenderStatusFooter } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
+import { BengacoonStatusComponent } from "./components/bengacoon-status.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
@@ -388,6 +394,7 @@ export class InteractiveMode {
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
+	private sidebarContainer: Container;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
 	private editorComponentFactory: EditorFactory | undefined;
@@ -399,6 +406,7 @@ export class InteractiveMode {
 	private activeSelectorDispose?: () => void;
 	private footer: FooterComponent;
 	private footerContainer: Container;
+	private bengacoonFooter: BengacoonStatusComponent;
 	private footerDataProvider: FooterDataProvider;
 	// Stored so the same manager can be injected into custom editors, selectors, and extension UI.
 	private keybindings: KeybindingsManager;
@@ -554,6 +562,7 @@ export class InteractiveMode {
 		this.documentContainer.addChild(this.chatContainer);
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
+		this.sidebarContainer = new Container();
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create();
@@ -569,10 +578,16 @@ export class InteractiveMode {
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
-		this.footer = new FooterComponent(this.session, this.footerDataProvider);
+		this.footer = new FooterComponent(this.session, this.footerDataProvider, ["bengacoon-jobs", "bengacoon-quota"]);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
+		const getBengacoonStatus = () => createBengacoonStatusSnapshot(this.session, this.footerDataProvider);
+		this.sidebarContainer.addChild(new BengacoonStatusComponent(getBengacoonStatus, "sidebar"));
+		this.bengacoonFooter = new BengacoonStatusComponent(getBengacoonStatus, "footer", () =>
+			shouldRenderStatusFooter(this.renderer.mode, this.renderer.terminal.columns),
+		);
+		this.footerContainer.addChild(this.bengacoonFooter);
 
 		// Load hide thinking block setting
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
@@ -886,6 +901,7 @@ export class InteractiveMode {
 			editor: this.editorContainer,
 			widgetsBelow: this.widgetContainerBelow,
 			footer: this.footerContainer,
+			sidebar: this.sidebarContainer,
 			scrollbar: this.settingsManager.getFullscreenScrollbar(),
 			scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
 			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
@@ -2092,8 +2108,8 @@ export class InteractiveMode {
 	/**
 	 * Set extension status text in the footer.
 	 */
-	private setExtensionStatus(key: string, text: string | undefined): void {
-		this.footerDataProvider.setExtensionStatus(key, text);
+	private setExtensionStatus(key: string, text: string | undefined, metadata?: ExtensionStatusMetadata): void {
+		this.footerDataProvider.setExtensionStatus(key, text, metadata);
 		this.ui.requestRender();
 	}
 
@@ -2336,6 +2352,7 @@ export class InteractiveMode {
 			this.customFooter = undefined;
 			this.footerContainer.addChild(this.footer);
 		}
+		this.footerContainer.addChild(this.bengacoonFooter);
 
 		this.ui.requestRender();
 	}
@@ -2432,7 +2449,7 @@ export class InteractiveMode {
 			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
-			setStatus: (key, text) => this.setExtensionStatus(key, text),
+			setStatus: (key, text, metadata) => this.setExtensionStatus(key, text, metadata),
 			setWorkingMessage: (message) => {
 				this.workingMessage = message;
 				if (this.activeStatusIndicator?.kind === "working") {

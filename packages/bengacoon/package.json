@@ -1,0 +1,42 @@
+{
+	"name": "@bengacoon/workflow",
+	"version": "0.85.1",
+	"private": true,
+	"description": "Built-in Bengacoon workflow, background jobs, skills, and prompts",
+	"type": "module",
+	"files": [
+		"extensions",
+		"orchestrator",
+		"prompts",
+		"scripts",
+		"skills"
+	],
+	"scripts": {
+		"test": "node extensions/jobs/lifecycle-checks.ts && node extensions/jobs/runtime-checks.ts",
+		"check:syntax": "node scripts/check-syntax.mjs",
+		"check:workflow": "node scripts/workflow-checks.mjs",
+		"check": "npm run check:syntax && npm test && npm run check:workflow"
+	},
+	"dependencies": {
+		"@earendil-works/pi-tui": "^0.85.1",
+		"typebox": "1.3.27"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"keywords": [
+		"pi-package"
+	],
+	"pi": {
+		"extensions": [
+			"./extensions/bengacoon.ts",
+			"./extensions/orchestrator.ts"
+		],
+		"skills": [
+			"./skills"
+		],
+		"prompts": [
+			"./prompts"
+		]
+	}
+}

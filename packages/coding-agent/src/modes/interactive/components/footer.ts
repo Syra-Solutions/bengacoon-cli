@@ -51,10 +51,16 @@ export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
+	private hiddenExtensionStatusKeys: ReadonlySet<string>;
 
-	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
+	constructor(
+		session: AgentSession,
+		footerData: ReadonlyFooterDataProvider,
+		hiddenExtensionStatusKeys: readonly string[] = [],
+	) {
 		this.session = session;
 		this.footerData = footerData;
+		this.hiddenExtensionStatusKeys = new Set(hiddenExtensionStatusKeys);
 	}
 
 	setSession(session: AgentSession): void {
@@ -231,8 +237,11 @@ export class FooterComponent implements Component {
 
 		// Add extension statuses on a single line, sorted by key alphabetically
 		const extensionStatuses = this.footerData.getExtensionStatuses();
-		if (extensionStatuses.size > 0) {
-			const sortedStatuses = Array.from(extensionStatuses.entries())
+		const visibleExtensionStatuses = Array.from(extensionStatuses.entries()).filter(
+			([key]) => !this.hiddenExtensionStatusKeys.has(key),
+		);
+		if (visibleExtensionStatuses.length > 0) {
+			const sortedStatuses = visibleExtensionStatuses
 				.sort(([a], [b]) => a.localeCompare(b))
 				.map(([, text]) => sanitizeStatusText(text));
 			const statusLine = sortedStatuses.join(" ");

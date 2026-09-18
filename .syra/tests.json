@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "testMode": "tdd",
+  "layers": [
+    {
+      "name": "unit",
+      "use": "Pure configuration, formatting, state, layout, and component behavior. Run the narrow Vitest or node:test file first; use ./test.sh for the full non-LLM suite.",
+      "runAll": "./test.sh",
+      "files": "packages/*/test/**/*.test.ts"
+    },
+    {
+      "name": "interactive",
+      "use": "Behavior that only exists in a real terminal viewport, including focus, resize, fullscreen layout, and mouse interaction. Follow .pi/skills/interactive-testing.md.",
+      "files": "packages/coding-agent/test/**/*.test.ts",
+      "cost": "Requires a tmux-driven interactive process but no paid model call when exercised with the faux provider."
+    }
+  ],
+  "notes": "After code changes, npm run check is mandatory and must be clean. It is a static gate, not a replacement for the narrow behavioral check. Never run npm test; use a specific test or ./test.sh as AGENTS.md requires."
+}

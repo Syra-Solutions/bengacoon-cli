@@ -1,4 +1,11 @@
-import { type Component, ScrollView, type ScrollViewScrollbar, VStack } from "@earendil-works/pi-tui";
+import { type Component, HStack, ScrollView, type ScrollViewScrollbar, VStack } from "@earendil-works/pi-tui";
+
+export const SIDEBAR_BREAKPOINT = 120;
+export const SIDEBAR_WIDTH = 36;
+
+export function shouldRenderStatusFooter(mode: "regular" | "fullscreen", terminalWidth: number): boolean {
+	return mode === "regular" || terminalWidth < SIDEBAR_BREAKPOINT;
+}
 
 export interface ChatViewportOptions {
 	readonly document: Component;
@@ -6,6 +13,7 @@ export interface ChatViewportOptions {
 	readonly status: Component;
 	readonly editor: Component;
 	readonly footer: Component;
+	readonly sidebar?: Component;
 	readonly widgetsAbove?: Component;
 	readonly widgetsBelow?: Component;
 	readonly scrollbar?: ScrollViewScrollbar;
@@ -36,11 +44,23 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
 		...(options.widgetsBelow === undefined ? [] : [{ component: options.widgetsBelow, shrink: 1, minSize: 0 }]),
 		{ component: options.footer, shrink: 1, minSize: 0 },
 	]);
-	return {
-		transcript,
-		root: new VStack([
-			{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-			{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
-		]),
-	};
+	const chat = new VStack([
+		{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+		{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+	]);
+	const root = options.sidebar
+		? new HStack([
+				{ component: chat, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+				{
+					component: options.sidebar,
+					basis: SIDEBAR_WIDTH,
+					grow: 0,
+					shrink: 0,
+					minSize: SIDEBAR_WIDTH,
+					maxSize: SIDEBAR_WIDTH,
+					visible: ({ width }) => width >= SIDEBAR_BREAKPOINT,
+				},
+			])
+		: chat;
+	return { transcript, root };
 }
