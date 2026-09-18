@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { mkdtemp, realpath, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { childArguments, childEnvironment, deriveFinalResult, formatTerminalCompletion, JobManager, sanitizeOutputTail, wasStoppedByGuard } from "./runner.ts";
+import { childArguments, childEnvironment, childInvocation, deriveFinalResult, formatTerminalCompletion, JobManager, sanitizeOutputTail, wasStoppedByGuard } from "./runner.ts";
 import { GUARD_BLOCKED_MARKER, isGuardedPathInsideRoot } from "./child-guard.ts";
 import { isSameOrDescendant, normalizeRecord, normalizeRecords, resolveProfileDir } from "./storage.ts";
 import { MODEL_ASSIGNMENTS_FILE, readModelAssignments, resolveBengacoonAgentDir, resolveModelAssignment, skillTargetFromInput, writeModelAssignments } from "../models/config.ts";
@@ -83,6 +83,13 @@ assert.deepEqual(
   ["--model", "openai/gpt-5.6-terra:low"],
 );
 assert.equal(childArguments("inspect the repository").includes("--model"), false);
+assert.deepEqual(
+  childInvocation("inspect the repository", undefined, "/opt/bengacoon/cli.js"),
+  {
+    command: process.execPath,
+    args: ["/opt/bengacoon/cli.js", ...childArguments("inspect the repository")],
+  },
+);
 assert.deepEqual(
   parseCodexQuotaHeaders({
     "x-codex-daily-used-percent": "25",
@@ -355,16 +362,21 @@ assert.deepEqual(staleEvents, []);
 const completedStore = new MemoryStore();
 const completedChild = new ClosingChild();
 const completedEvents = [];
+let completedInvocation;
 const completedManager = new JobManager(
   completedStore,
   root,
   "/safe/profile",
   undefined,
-  () => completedChild,
+  (command, args) => {
+    completedInvocation = { command, args };
+    return completedChild;
+  },
   (record) => completedEvents.push(record),
 );
 await completedManager.initialize();
 const completedRecord = await completedManager.start(rawTask, "verification");
+assert.deepEqual(completedInvocation, childInvocation(rawTask));
 assert.equal(completedRecord.pid, 4321);
 completedManager.capture(completedRecord, "FINAL_RESULT: Found the background-job modules. token: child-output-must-not-be-delivered\n");
 completedChild.emit("close", 0, null);

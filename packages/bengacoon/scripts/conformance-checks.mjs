@@ -16,9 +16,8 @@ import { existsSync, rmSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
-  CHILD_COMMAND,
-  childArguments,
   childEnvironment,
+  childInvocation,
   deriveFinalResult,
 } from "../extensions/jobs/runner.ts";
 import { GUARD_BLOCKED_MARKER } from "../extensions/jobs/child-guard.ts";
@@ -26,6 +25,7 @@ import { resolveProfileDir } from "../extensions/jobs/storage.ts";
 
 const TIMEOUT_MS = 180_000;
 const repoRoot = await realpath(resolve(import.meta.dirname, ".."));
+const childEntrypoint = resolve(repoRoot, "../coding-agent/dist/bundle/cli.js");
 
 const profileDir = await resolveProfileDir(
   process.env.BENGACOON_PROFILE_DIR,
@@ -37,7 +37,8 @@ const profileDir = await resolveProfileDir(
 // drift from production and then report on an invocation nobody uses.
 function runChild(task) {
   return new Promise((resolveRun, rejectRun) => {
-    const child = spawn(CHILD_COMMAND, childArguments(task), {
+    const invocation = childInvocation(task, undefined, childEntrypoint);
+    const child = spawn(invocation.command, invocation.args, {
       cwd: repoRoot,
       env: childEnvironment(profileDir, repoRoot),
       stdio: ["ignore", "pipe", "pipe"],
@@ -65,7 +66,7 @@ function runChild(task) {
   });
 }
 
-console.log(`conformance: running a real ${CHILD_COMMAND} child against ${repoRoot}\n`);
+console.log(`conformance: running a real Bengacoon child against ${repoRoot}\n`);
 
 // A child that never reached a model proves nothing about the guard. Separate that from a
 // real failure explicitly: confusing "not signed in" with "the boundary is gone" is the one

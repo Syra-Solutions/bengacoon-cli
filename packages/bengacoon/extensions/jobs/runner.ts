@@ -42,8 +42,6 @@ function childPrompt(task) {
   ].join("\n\n");
 }
 
-export const CHILD_COMMAND = "bengacoon";
-
 // Exported so the conformance check can drive the exact invocation a job uses. A check that
 // rebuilt these arguments itself would drift from production and then report on a command
 // nobody runs — the guard's whole boundary rests on Pi honouring this flag set.
@@ -63,6 +61,16 @@ export function childArguments(task, model) {
     "--",
     childPrompt(task),
   ];
+}
+
+export function childInvocation(task, model, entrypoint = process.argv[1]) {
+  if (typeof entrypoint !== "string" || !entrypoint) {
+    throw new Error("Unable to determine the Bengacoon CLI entrypoint for a child job.");
+  }
+  return {
+    command: process.execPath,
+    args: [entrypoint, ...childArguments(task, model)],
+  };
 }
 
 export function validateTask(task) {
@@ -367,9 +375,10 @@ export class JobManager {
     let child;
     try {
       const model = await this.modelForCategory?.(normalizedCategory);
+      const invocation = childInvocation(task, model);
       child = this.spawnChild(
-        CHILD_COMMAND,
-        childArguments(task, model),
+        invocation.command,
+        invocation.args,
         {
           cwd: this.worktreeRoot,
           env: childEnvironment(this.profileDir, this.worktreeRoot),
