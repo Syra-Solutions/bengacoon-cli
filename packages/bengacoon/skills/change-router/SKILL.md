@@ -94,10 +94,21 @@ Which reviewers face it is not yours to decide:
 node "$SYRA_SCRIPTS"/review-gate.mjs plan --route <the route you announced>
 ```
 
-`required` and `chosen` reviewers run automatically. `optional` reviewers do not:
-ask the person whether the listed risk reviews are needed, then include only the
-ones they select. A project can make `tests` optional without changing whether it
-writes and proves tests. You may not drop a required or chosen reviewer.
+`required` and `chosen` reviewers run automatically. Before asking about
+`optional` reviewers, inspect the staged diff and recommend at most one optional
+reviewer. Recommend security only for credentials, paths, or trust decisions;
+performance only for a query, loop, cache, or concurrency concern; architecture
+only for a new module, boundary, or layer. Recommend `tests` only when a changed
+check has unusual concurrency or a system boundary that the focused check and
+prove-red do not make clear.
+
+Do not recommend an optional reviewer for formatting, comments, small local
+logic, routine tests, or a vague possibility. When none of the triggers applies,
+say: `My recommendation is to run no additional reviewer; code is sufficient.`
+Otherwise name one reviewer, the concrete changed behavior that triggered it, and
+why that review adds information. Then ask one question: whether to include the
+recommended reviewer. A project can make `tests` optional without changing
+whether it writes and proves tests. You may not drop a required or chosen reviewer.
 
 Run each selected reviewer through `bengacoon_run_reviewer`. It launches an
 isolated read-only process with the frozen staged diff and persists its raw result.

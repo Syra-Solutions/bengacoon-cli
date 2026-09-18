@@ -802,6 +802,15 @@ console.log("skills and prompts");
   rmSync(planDir, { recursive: true, force: true });
 }
 {
+  const router = readFileSync(join(repoRoot, "skills", "change-router", "SKILL.md"), "utf8");
+  assert.match(router, /recommend at most one optional\s+reviewer/i);
+  assert.match(router, /security only for credentials, paths, or trust decisions/i);
+  assert.match(router, /performance only for a query, loop, cache, or concurrency concern/i);
+  assert.match(router, /architecture\s+only for a new module, boundary, or layer/i);
+  assert.match(router, /recommendation is to run no additional reviewer; code is sufficient/i);
+  console.log("  optional reviewer advice is risk-triggered, singular, and can recommend none");
+}
+{
   // Project configuration lives in one directory, and every file that names a path into it was
   // updated by hand when that directory was renamed. A stale path is silent: the reviewer reads
   // nothing, finds nothing, and records a clean verdict it had no context for.
