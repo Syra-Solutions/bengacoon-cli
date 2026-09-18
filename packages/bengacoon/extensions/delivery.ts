@@ -1,9 +1,36 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 
 const WORK_DIRECTORY = ".syra/work";
+const STATE_FILE = "bengacoon-delivery.json";
+
+function deliveryStatePath(cwd) {
+  return resolve(cwd, execFileSync("git", ["rev-parse", "--git-path", STATE_FILE], { cwd, encoding: "utf8", stdio: "pipe" }).trim());
+}
+
+export function loadDeliveryState(cwd) {
+  try {
+    const state = JSON.parse(readFileSync(deliveryStatePath(cwd), "utf8"));
+    if (
+      typeof state?.title !== "string" ||
+      typeof state?.criterion !== "string" ||
+      typeof state?.nextStep !== "string" ||
+      typeof state?.verification !== "string"
+    )
+      return undefined;
+    return state;
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveDeliveryState(cwd, state) {
+  const path = deliveryStatePath(cwd);
+  mkdirSync(resolve(path, ".."), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(state)}\n`, { mode: 0o600 });
+}
 
 export function parseActiveDeliveryWork(contents) {
   const lines = String(contents).split("\n");

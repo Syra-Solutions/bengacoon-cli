@@ -7,7 +7,7 @@ import { formatDetail, formatList, jobStatusSnapshot, jobStatusUpdates, statusTe
 import { JobCard, JobsView } from "./jobs/ui.ts";
 import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.ts";
 import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
-import { activeDeliveryWork, receiptState } from "./delivery.ts";
+import { activeDeliveryWork, loadDeliveryState, receiptState, saveDeliveryState } from "./delivery.ts";
 import { SessionChanges } from "./changes.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
@@ -226,6 +226,8 @@ export default function bengacoon(pi) {
 
   pi.on("session_start", async (_event, ctx) => {
     setQuotaStatus(ctx, undefined);
+    const delivery = loadDeliveryState(ctx.cwd);
+    if (delivery) setDeliveryStatus(ctx, { ...delivery, receipt: receiptState(ctx.cwd) });
     const session = Symbol("bengacoon-job-delivery");
     quotaSession = session;
     quotaRefreshAt = 0;
@@ -282,6 +284,7 @@ export default function bengacoon(pi) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const work = activeDeliveryWork(ctx.cwd, params.workFile);
       const delivery = { ...work, verification: params.verification, receipt: receiptState(ctx.cwd) };
+      saveDeliveryState(ctx.cwd, delivery);
       setDeliveryStatus(ctx, delivery);
       return { content: [{ type: "text", text: `Reported delivery: ${delivery.nextStep} (${delivery.verification}; receipt ${delivery.receipt}).` }] };
     },
