@@ -6,7 +6,7 @@
 - [x] ship the Bengacoon workflow as a built-in package
       done: a clean Bengacoon profile starts with the packaged workflow, skills, jobs, and model-assignment command available without installing another package
 
-- [ ] add a structural sidebar slot to fullscreen layout
+- [x] add a structural sidebar slot to fullscreen layout
       done: at 120 terminal columns or wider, a 36-column right sidebar is reserved and transcript lines never enter it; below 120 columns the transcript uses the full width and the sidebar slot is absent
 
 - [ ] provide the Bengacoon status snapshot
