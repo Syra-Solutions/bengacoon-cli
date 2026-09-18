@@ -25,9 +25,9 @@ const REQUIRED_BY_ROUTE = {
   refactor: [],
 };
 
-// Whether a project writes tests is its own decision, made once in .syra/tests.json. What follows
-// from that decision is not: a project that writes tests always has them reviewed, and one that
-// does not has nothing for that reviewer to read. Each commit's receipt records which it was.
+// Whether a project writes tests is its own decision, made once in .syra/tests.json. Its reviewer
+// is required by default, but each project may make it optional or disable it in .syra/reviews.json.
+// Each commit's receipt always records the test mode.
 const REQUIRED_BY_TEST_MODE = {
   tdd: ["tests"],
   tad: ["tests"],
@@ -43,6 +43,7 @@ const OFFERED = [
   { name: "architecture", asks: "Review where changed code lives and which layer it depends on?" },
   { name: "code", asks: "Review changed code for readability, design and type safety?" },
 ];
+const REVIEWER_NAMES = new Set(["tests", ...OFFERED.map((entry) => entry.name)]);
 
 // How a project is split for review. A web project has a backend and a frontend that deserve
 // different checklists; anything else — a CLI, a library, a package of agent instructions — is
@@ -148,6 +149,13 @@ function stagedFingerprint() {
   };
 }
 
+function configuredReviewers(value, field) {
+  if (!Array.isArray(value) || value.some((reviewer) => typeof reviewer !== "string" || !REVIEWER_NAMES.has(reviewer))) {
+    throw new Error(`${CONFIG_PATH}: "${field}" must be an array of: ${[...REVIEWER_NAMES].join(", ")}.`);
+  }
+  return [...new Set(value)];
+}
+
 function readConfig() {
   if (!existsSync(CONFIG_PATH)) return undefined;
   try {
@@ -162,9 +170,15 @@ function readConfig() {
       console.error(`${CONFIG_PATH}: "mode" must be one of ${Object.keys(LAYERS_BY_MODE).join(", ")}, got ${JSON.stringify(parsed.mode)}.`);
       process.exit(2);
     }
+    const testReview = parsed.testReview ?? "required";
+    if (!new Set(["required", "optional", "off"]).has(testReview)) {
+      throw new Error(`${CONFIG_PATH}: "testReview" must be required, optional, or off.`);
+    }
     return {
       mode: parsed.mode,
-      general: Array.isArray(parsed.general) ? parsed.general : [],
+      general: configuredReviewers(parsed.general ?? [], "general"),
+      optional: configuredReviewers(parsed.optional ?? [], "optional"),
+      testReview,
       budgetLines: Number.isInteger(parsed.budgetLines) && parsed.budgetLines > 0 ? parsed.budgetLines : DEFAULT_BUDGET_LINES,
     };
   } catch (error) {
@@ -198,12 +212,13 @@ function readTestMode() {
 }
 
 function parseArguments(argv) {
-  const options = { command: argv[0], route: undefined, verdicts: [] };
+  const options = { command: argv[0], route: undefined, verdicts: [], includedReviewers: [] };
   for (let index = 1; index < argv.length; index += 1) {
     if (argv[index] === "--route") { options.route = argv[index + 1]; index += 1; }
     else if (argv[index] === "--oversize-accepted") { options.oversizeAccepted = argv[index + 1]; index += 1; }
     else if (argv[index] === "--verdict") { options.verdicts.push(argv[index + 1]); index += 1; }
     else if (argv[index] === "--reviewer") { options.reviewer = argv[index + 1]; index += 1; }
+    else if (argv[index] === "--include-reviewer") { options.includedReviewers.push(argv[index + 1]); index += 1; }
     else if (argv[index] === "--layer") { options.layer = argv[index + 1]; index += 1; }
   }
   return options;
@@ -215,10 +230,26 @@ function planFor(route, config, testMode) {
     console.error(`unknown route: ${route}. Expected one of ${Object.keys(REQUIRED_BY_ROUTE).join(", ")}.`);
     process.exit(2);
   }
-  const required = [...new Set([...byRoute, ...REQUIRED_BY_TEST_MODE[testMode]])];
-  // Selection may widen but never narrow: a reviewer the project chose is added to the
-  // required set, and nothing removes one the route demands.
-  return { required, chosen: config.general.filter((name) => !required.includes(name)) };
+  const required = [...new Set([
+    ...byRoute,
+    ...(config.testReview === "required" ? REQUIRED_BY_TEST_MODE[testMode] : []),
+  ])];
+  const chosen = config.general.filter((name) => !required.includes(name));
+  const optional = [...new Set([
+    ...(config.testReview === "optional" ? ["tests"] : []),
+    ...config.optional.filter((name) => config.testReview !== "off" || name !== "tests"),
+  ])].filter((name) => !required.includes(name) && !chosen.includes(name));
+  return { required, chosen, optional };
+}
+
+function selectedReviewers(plan) {
+  const included = [...new Set(options.includedReviewers)];
+  const invalid = included.filter((reviewer) => !plan.optional.includes(reviewer));
+  if (invalid.length > 0) {
+    console.error(`Optional reviewers must be selected from: ${plan.optional.join(", ") || "none"}. Invalid: ${invalid.join(", ")}.`);
+    process.exit(2);
+  }
+  return [...plan.required, ...plan.chosen, ...included];
 }
 
 const options = parseArguments(process.argv.slice(2));
@@ -245,7 +276,8 @@ if (options.command === "plan") {
     }
     process.exit(3);
   }
-  const { required, chosen } = planFor(options.route, config, testMode);
+  const { required, chosen, optional } = planFor(options.route, config, testMode);
+  const reviewers = selectedReviewers({ required, chosen, optional });
   const testModeMeaning = {
     tdd: "a failing check first, then the change",
     tad: "the change first, then its check",
@@ -254,10 +286,11 @@ if (options.command === "plan") {
   console.log(`route:    ${options.route}`);
   console.log(`mode:     ${config.mode}${config.mode === "web" ? "   (one checklist per layer: backend, frontend)" : "   (one checklist for the whole change)"}`);
   console.log(`tests:    ${testMode}   (${testModeMeaning[testMode]})`);
-  console.log(`required: ${required.join(", ") || "none"}          (by activity and test mode — cannot be turned off)`);
-  console.log(`chosen:   ${chosen.join(", ") || "none"}   (by this project)`);
-  console.log(`\nEvery one of these must appear in the receipt, with what it found or why it did`);
-  console.log(`not apply. A reviewer you judge relevant may be added; none may be dropped.`);
+  console.log(`required: ${required.join(", ") || "none"}          (cannot be turned off)`);
+  console.log(`chosen:   ${chosen.join(", ") || "none"}   (automatic for this project)`);
+  console.log(`optional: ${optional.join(", ") || "none"}   (ask before adding with --include-reviewer)`);
+  console.log(`selected: ${reviewers.join(", ") || "none"}`);
+  console.log(`\nEvery selected reviewer must appear in the receipt.`);
   process.exit(0);
 }
 
@@ -289,8 +322,8 @@ if (options.command === "record") {
     process.exit(1);
   }
 
-  const { required, chosen } = planFor(options.route, config, testMode);
-  const reviewers = [...required, ...chosen];
+  const plan = planFor(options.route, config, testMode);
+  const reviewers = selectedReviewers(plan);
   const correction = readCorrection();
   if (correction) {
     if (correction.route !== options.route || JSON.stringify(correction.reviewers) !== JSON.stringify(reviewers)) {

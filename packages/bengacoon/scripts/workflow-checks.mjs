@@ -447,9 +447,26 @@ console.log("review-gate");
   }
   console.log("  a missing test mode is asked for, and an empty one is refused rather than read as none");
 }
+{
+  const { dir, git } = scratchRepo();
+  writeFileSync(join(dir, ".syra", "reviews.json"), '{"version":1,"mode":"generic","general":["code"],"optional":["security","performance","architecture"],"testReview":"optional"}\n');
+  applyFix(dir);
+  git(["add", "sum.mjs"]);
+  const planned = run(reviewGate, ["plan", "--route", "reproduce"], dir);
+  assert.match(planned.output, /^optional:\s+tests, security, performance, architecture/m);
+  const automatic = recordEvidence(dir, "reproduce", ["code"]);
+  assert.equal(automatic.status, 0, automatic.output);
+  const receipt = JSON.parse(readFileSync(join(dir, ".git", "review-receipt.json"), "utf8"));
+  assert.deepEqual(Object.keys(receipt.reviewers), ["code"]);
+  const included = recordEvidence(dir, "reproduce", ["code", "tests", "security"], ["--include-reviewer", "tests", "--include-reviewer", "security"]);
+  assert.equal(included.status, 0, included.output);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir, ".git", "review-receipt.json"), "utf8")).reviewers), ["code", "tests", "security"]);
+  rmSync(dir, { recursive: true, force: true });
+  console.log("  tests and risk reviewers are optional when the project selects code alone");
+}
 
 {
-  // A project's checklist replaces the generic one; the two are never both in play. The reviewer
+  // A project's checklist replaces the generic one; the two are never both in play; The reviewer
   // reads whatever path this prints, so this is where "no overlap" is actually guaranteed.
   const dir = mkdtempSync(join(tmpdir(), "workflow-checks-"));
   const setMode = (mode) => {

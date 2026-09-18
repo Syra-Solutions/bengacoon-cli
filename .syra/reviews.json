@@ -1,5 +1,7 @@
 {
   "version": 1,
   "mode": "generic",
-  "general": ["security", "performance", "architecture", "code"]
+  "general": ["code"],
+  "optional": ["security", "performance", "architecture"],
+  "testReview": "optional"
 }

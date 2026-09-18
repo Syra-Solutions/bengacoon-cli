@@ -94,18 +94,18 @@ Which reviewers face it is not yours to decide:
 node "$SYRA_SCRIPTS"/review-gate.mjs plan --route <the route you announced>
 ```
 
-Some are **required** and cannot be turned off — in a project that writes tests
-(`tdd` or `tad`), every change faces `review-tests`, because a check that cannot
-fail is counted as protection. Others the project **chose** once. You may add a reviewer you judge relevant; you may not
-drop one the plan names. If the project has never answered, the plan says so and
-asks — ask once, write the file, continue.
+`required` and `chosen` reviewers run automatically. `optional` reviewers do not:
+ask the person whether the listed risk reviews are needed, then include only the
+ones they select. A project can make `tests` optional without changing whether it
+writes and proves tests. You may not drop a required or chosen reviewer.
 
 Run each selected reviewer through `bengacoon_run_reviewer`. It launches an
 isolated read-only process with the frozen staged diff and persists its raw result.
 Then record only those artifacts:
 
 ```bash
-node "$SYRA_SCRIPTS"/review-gate.mjs record --route <route>
+node "$SYRA_SCRIPTS"/review-gate.mjs record --route <route> \
+  --include-reviewer <each optional reviewer the person selected>
 ```
 
 `--verdict` is refused: prose supplied by the caller is not reviewer evidence.
