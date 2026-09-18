@@ -5,15 +5,26 @@ import { formatTokens } from "./footer.ts";
 
 export type BengacoonStatusLayout = "sidebar" | "footer";
 
+function formatPercent(value: number): string {
+	return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 function availablePercent(value: number | null): string {
-	return value === null ? "Unavailable" : `${Number.isInteger(value) ? value : value.toFixed(1)}% remaining`;
+	return value === null ? "Unavailable" : `${formatPercent(value)}% remaining`;
 }
 
 function contextRemaining(snapshot: BengacoonStatusSnapshot): string {
 	const { remainingTokens, remainingPercent } = snapshot.context;
 	if (remainingTokens === null || remainingPercent === null) return "Unavailable";
-	const percent = Number.isInteger(remainingPercent) ? remainingPercent : remainingPercent.toFixed(1);
-	return `${formatTokens(remainingTokens)} tokens · ${percent}%`;
+	return `${formatTokens(remainingTokens)} tokens · ${formatPercent(remainingPercent)}%`;
+}
+
+function contextUsageBar(snapshot: BengacoonStatusSnapshot): string {
+	const remainingPercent = snapshot.context.remainingPercent;
+	if (remainingPercent === null) return "Unavailable";
+	const usedPercent = Math.min(100, Math.max(0, 100 - remainingPercent));
+	const filledBlocks = Math.round(usedPercent / 10);
+	return `${theme.fg("success", "█".repeat(filledBlocks))}${theme.fg("dim", "░".repeat(10 - filledBlocks))} ${formatPercent(usedPercent)}%`;
 }
 
 function jobSummary(snapshot: BengacoonStatusSnapshot): string {
@@ -45,10 +56,10 @@ function sidebarCard(title: string, rows: readonly [label: string, value: string
 function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number): string[] {
 	const safeWidth = Math.max(1, width);
 	return [
-		...sidebarCard("Git", [["Branch", snapshot.branch ?? "Unavailable"]], safeWidth),
+		...sidebarCard(" Git", [["Branch", snapshot.branch ?? "Unavailable"]], safeWidth),
 		"",
 		...sidebarCard(
-			"AI usage",
+			"⚙ AI usage",
 			[
 				["Input", formatTokens(snapshot.usage.inputTokens)],
 				["Output", formatTokens(snapshot.usage.outputTokens)],
@@ -57,10 +68,17 @@ function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number): string[
 			safeWidth,
 		),
 		"",
-		...sidebarCard("Context", [["Remaining", contextRemaining(snapshot)]], safeWidth),
+		...sidebarCard(
+			"◷ Context",
+			[
+				["Remaining", contextRemaining(snapshot)],
+				["Used", contextUsageBar(snapshot)],
+			],
+			safeWidth,
+		),
 		"",
 		...sidebarCard(
-			"Jobs",
+			"↻ Jobs",
 			[
 				["Summary", jobSummary(snapshot)],
 				...snapshot.jobs.details.map((detail) => ["Detail", detail] as [string, string]),
@@ -69,7 +87,7 @@ function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number): string[
 		),
 		"",
 		...sidebarCard(
-			"Quota",
+			"◐ Quota",
 			[
 				["Daily", availablePercent(snapshot.quota.dailyRemainingPercent)],
 				["Weekly", availablePercent(snapshot.quota.weeklyRemainingPercent)],

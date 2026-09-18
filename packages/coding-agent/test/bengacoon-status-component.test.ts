@@ -25,22 +25,33 @@ describe("Bengacoon status component", () => {
 		const text = lines.map(stripTerminalSequences).join("\n");
 
 		expect(lines.every((line) => visibleWidth(line) <= 36)).toBe(true);
-		expect(lines).toContain(theme.fg("accent", "╭─ Git"));
+		expect(lines).toContain(theme.fg("accent", "╭─  Git"));
 		expect(lines.some((line) => line.includes(theme.fg("muted", "Branch")))).toBe(true);
-		expect(text).toContain("╭─ Git");
+		expect(text).toContain("╭─  Git");
 		expect(text).toContain("│ Branch");
-		expect(text).toContain("╭─ AI usage");
+		expect(text).toContain("╭─ ⚙ AI usage");
 		expect(text).toContain("│ Input");
-		expect(text).toContain("╭─ Context");
+		expect(text).toContain("╭─ ◷ Context");
 		expect(text).toContain("│ Remaining");
-		expect(text).toContain("╭─ Jobs");
+		expect(text).toContain("╭─ ↻ Jobs");
 		expect(text).toContain("│ Summary  4 total · 1 active · 1");
 		expect(text).toContain("│          failed");
 		expect(text).toContain("│ Detail   a1b2c3d4 running");
 		expect(text).toContain("│ Detail   e5f6a7b8 failed");
-		expect(text).toContain("╭─ Quota");
+		expect(text).toContain("╭─ ◐ Quota");
 		expect(text).toContain("│ Daily    60% remaining");
 		expect(text).toContain("│ Weekly   Unavailable");
+	});
+
+	it("fills the context bar from used context", () => {
+		initTheme("cyber-coon");
+		const component = new BengacoonStatusComponent(
+			() => ({ ...snapshot, context: { remainingTokens: 18_300, remainingPercent: 18.3 } }),
+			"sidebar",
+		);
+		const text = component.render(36).map(stripTerminalSequences).join("\n");
+
+		expect(text).toContain("│ Used     ████████░░ 81.7%");
 	});
 
 	it("renders a readable multiline footer and skips snapshot work when hidden", () => {
