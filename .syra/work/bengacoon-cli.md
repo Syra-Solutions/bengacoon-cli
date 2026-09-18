@@ -9,7 +9,7 @@
 - [x] add a structural sidebar slot to fullscreen layout
       done: at 120 terminal columns or wider, a 36-column right sidebar is reserved and transcript lines never enter it; below 120 columns the transcript uses the full width and the sidebar slot is absent
 
-- [ ] provide the Bengacoon status snapshot
+- [x] provide the Bengacoon status snapshot
       done: one snapshot reports Git branch, session input/output tokens and cost, remaining context, job totals plus active/failed job details, and daily/weekly Codex quota when response headers provide it or `Unavailable` otherwise
 
 - [ ] render the status responsively

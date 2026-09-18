@@ -1,8 +1,10 @@
 import { Type } from "typebox";
 import { formatTerminalCompletion, JobManager, validateTask } from "./jobs/runner.ts";
 import { canonicalWorktree, JobStore, resolveProfileDir } from "./jobs/storage.ts";
-import { CompletionCard, formatDetail, formatList, JobsView, statusText } from "./jobs/ui.ts";
+import { formatDetail, formatList, jobStatusSnapshot, statusText } from "./jobs/format.ts";
+import { CompletionCard, JobsView } from "./jobs/ui.ts";
 import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.ts";
+import { parseCodexQuotaHeaders } from "./quota.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
 const STATUS_SIGNAL = "BENGACOON_STATUS: extension=loaded";
@@ -16,7 +18,30 @@ export default function bengacoon(pi) {
   const setJobStatus = (ctx, records) => {
     const unconfirmed = records.filter((record) => record.status === "termination_unconfirmed").length;
     const warning = unconfirmed > 0 ? `; warning: ${unconfirmed} termination unconfirmed` : "";
-    ctx.ui.setStatus("bengacoon-jobs", `${statusText(records)}${warning}`);
+    const snapshot = jobStatusSnapshot(records);
+    ctx.ui.setStatus("bengacoon-jobs", `${statusText(records)}${warning}`, {
+      lines: snapshot.details,
+      values: {
+        total: String(snapshot.total),
+        active: String(snapshot.active),
+        failed: String(snapshot.failed),
+      },
+    });
+  };
+
+  const setQuotaStatus = (ctx, quota) => {
+    const daily = quota?.dailyRemainingPercent;
+    const weekly = quota?.weeklyRemainingPercent;
+    ctx.ui.setStatus(
+      "bengacoon-quota",
+      `quota: daily ${daily === undefined ? "Unavailable" : `${daily}% remaining`}, weekly ${weekly === undefined ? "Unavailable" : `${weekly}% remaining`}`,
+      {
+        values: {
+          ...(daily === undefined ? {} : { dailyRemainingPercent: String(daily) }),
+          ...(weekly === undefined ? {} : { weeklyRemainingPercent: String(weekly) }),
+        },
+      },
+    );
   };
 
   const initialize = async (ctx, session) => {
@@ -92,7 +117,13 @@ export default function bengacoon(pi) {
     });
   });
 
+  pi.on("after_provider_response", (event, ctx) => {
+    const quota = parseCodexQuotaHeaders(event.headers);
+    if (quota) setQuotaStatus(ctx, quota);
+  });
+
   pi.on("session_start", async (_event, ctx) => {
+    setQuotaStatus(ctx, undefined);
     const session = Symbol("bengacoon-job-delivery");
     deliverySession = session;
     manager = undefined;
@@ -107,7 +138,10 @@ export default function bengacoon(pi) {
     };
     ctx.ui.notify(LOAD_SIGNAL, "info");
     initialization = initialize(ctx, session).catch((error) => {
-      ctx.ui.setStatus("bengacoon-jobs", "jobs: unavailable");
+      ctx.ui.setStatus("bengacoon-jobs", "jobs: unavailable", {
+        lines: [],
+        values: { total: "0", active: "0", failed: "0" },
+      });
       ctx.ui.notify(`Bengacoon jobs unavailable: ${error.message}`, "error");
       throw error;
     });

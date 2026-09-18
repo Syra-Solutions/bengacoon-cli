@@ -112,6 +112,24 @@ describe("FooterDataProvider reftable branch detection", () => {
 		}
 	});
 
+	it("stores defensive copies of structured extension status metadata and clears them with the status", () => {
+		const provider = new FooterDataProvider(tempDir);
+		const lines = ["running job"];
+		const values = { active: "1" };
+		provider.setExtensionStatus("jobs", "jobs: 1 active", { lines, values });
+		lines.push("mutated");
+		values.active = "2";
+
+		expect(provider.getExtensionStatusMetadata().get("jobs")).toEqual({
+			lines: ["running job"],
+			values: { active: "1" },
+		});
+
+		provider.setExtensionStatus("jobs", undefined);
+		expect(provider.getExtensionStatusMetadata().has("jobs")).toBe(false);
+		provider.dispose();
+	});
+
 	it("uses HEAD directly in a regular repo from a nested directory", () => {
 		const repoDir = createPlainRepo(tempDir);
 		const nestedDir = join(repoDir, "src", "nested");

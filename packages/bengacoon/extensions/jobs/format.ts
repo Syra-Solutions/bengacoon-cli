@@ -3,16 +3,28 @@ import { jobTitleForCategory } from "./storage.ts";
 const ACTIVE_STATES = new Set(["queued", "running"]);
 
 function shortId(id) {
-  return id.slice(0, 8);
+  return typeof id === "string" ? id.slice(0, 8) : "unknown";
 }
 
 function isPossibleOrphan(record) {
   return record.status === "interrupted" && Boolean(record.pid) && record.orphanProcessPresent !== false;
 }
 
+export function jobStatusSnapshot(records) {
+  const activeRecords = records.filter((record) => ACTIVE_STATES.has(record.status));
+  const failedRecords = records.filter((record) => record.status === "failed");
+  return {
+    total: records.length,
+    active: activeRecords.length,
+    failed: failedRecords.length,
+    details: [...activeRecords, ...failedRecords].map(
+      (record) => `${shortId(record.id)} ${record.status} ${jobTitleForCategory(record.category)}`,
+    ),
+  };
+}
+
 export function statusText(records) {
-  const active = records.filter((record) => ACTIVE_STATES.has(record.status)).length;
-  const failed = records.filter((record) => record.status === "failed").length;
+  const { active, failed } = jobStatusSnapshot(records);
   const orphans = records.filter(isPossibleOrphan).length;
   const orphanSuffix = orphans > 0 ? `, ${orphans} possible orphan${orphans === 1 ? "" : "s"}` : "";
   if (active === 0 && failed === 0) return `jobs: ${records.length} retained${orphanSuffix}`;

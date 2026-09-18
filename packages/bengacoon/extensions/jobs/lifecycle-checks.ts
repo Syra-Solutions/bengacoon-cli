@@ -9,6 +9,7 @@ import { isSameOrDescendant, normalizeRecord, normalizeRecords, resolveProfileDi
 import { MODEL_ASSIGNMENTS_FILE, readModelAssignments, resolveBengacoonAgentDir, resolveModelAssignment, skillTargetFromInput, writeModelAssignments } from "../models/config.ts";
 import { formatDetail, statusText } from "./format.ts";
 import orchestrator, { contextStoreAdapter } from "../orchestrator.ts";
+import { parseCodexQuotaHeaders } from "../quota.ts";
 
 class MemoryStore {
   constructor(initialRecords = []) {
@@ -82,6 +83,23 @@ assert.deepEqual(
   ["--model", "openai/gpt-5.6-terra:low"],
 );
 assert.equal(childArguments("inspect the repository").includes("--model"), false);
+assert.deepEqual(
+  parseCodexQuotaHeaders({
+    "x-codex-daily-used-percent": "25",
+    "x-codex-weekly-remaining-percent": "40",
+  }),
+  { dailyRemainingPercent: 75, weeklyRemainingPercent: 40 },
+);
+assert.deepEqual(
+  parseCodexQuotaHeaders({
+    "x-codex-primary-used-percent": "10",
+    "x-codex-primary-window-minutes": "1440",
+    "x-codex-secondary-used-percent": "30",
+    "x-codex-secondary-window-minutes": "10080",
+  }),
+  { dailyRemainingPercent: 90, weeklyRemainingPercent: 70 },
+);
+assert.equal(parseCodexQuotaHeaders({ "x-request-id": "request-1" }), undefined);
 assert.equal(resolveBengacoonAgentDir({}, "/home/example"), "/home/example/.bengacoon/agent");
 assert.equal(
   resolveBengacoonAgentDir({ BENGACOON_CODING_AGENT_DIR: "/custom/agent" }, "/home/example"),
