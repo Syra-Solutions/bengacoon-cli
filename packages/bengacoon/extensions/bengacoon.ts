@@ -5,6 +5,7 @@ import { formatDetail, formatList, jobStatusSnapshot, jobStatusUpdates, statusTe
 import { JobCard, JobsView } from "./jobs/ui.ts";
 import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.ts";
 import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
+import { activeDeliveryWork, receiptState } from "./delivery.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
 const STATUS_SIGNAL = "BENGACOON_STATUS: extension=loaded";
@@ -52,6 +53,12 @@ export default function bengacoon(pi) {
         active: String(snapshot.active),
         failed: String(snapshot.failed),
       },
+    });
+  };
+
+  const setDeliveryStatus = (ctx, delivery) => {
+    ctx.ui.setStatus("bengacoon-delivery", `delivery: ${delivery.title}; ${delivery.verification}; receipt ${delivery.receipt}`, {
+      values: { delivery: JSON.stringify(delivery) },
     });
   };
 
@@ -220,6 +227,22 @@ export default function bengacoon(pi) {
     const closingManager = manager;
     manager = undefined;
     if (closingManager) await closingManager.shutdown();
+  });
+
+  pi.registerTool({
+    name: "bengacoon_report_delivery",
+    label: "Report Bengacoon Delivery",
+    description: "Report the active Bengacoon work item and its verification progress to the sidebar. Receipt status is read from the staged Git diff and does not authorize commits.",
+    parameters: Type.Object({
+      workFile: Type.String({ minLength: 1, description: "Path to an active .syra/work Markdown record" }),
+      verification: Type.String({ enum: ["pending", "check passed", "prove-red proven"], description: "Progress reported by the workflow" }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const work = activeDeliveryWork(ctx.cwd, params.workFile);
+      const delivery = { ...work, verification: params.verification, receipt: receiptState(ctx.cwd) };
+      setDeliveryStatus(ctx, delivery);
+      return { content: [{ type: "text", text: `Reported delivery: ${delivery.nextStep} (${delivery.verification}; receipt ${delivery.receipt}).` }] };
+    },
   });
 
   pi.registerTool({

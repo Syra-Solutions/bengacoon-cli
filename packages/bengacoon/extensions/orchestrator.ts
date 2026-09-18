@@ -81,10 +81,13 @@ export function orchestratorPrompt(cwd, selectedTools, dir = ORCHESTRATOR_DIR, s
     readOrUndefined(join(cwd, ".syra", "voice.md")) ??
     readOrUndefined(join(dir, "voice", "neutral.md"));
 
+  const deliveryReporter = Array.isArray(selectedTools) && selectedTools.includes("bengacoon_report_delivery")
+    ? "When working from a .syra/work record, call bengacoon_report_delivery when starting its next item and after each verification milestone. Its verification field is progress only; the staged receipt remains commit authority."
+    : undefined;
   const reviewReporter = Array.isArray(selectedTools) && selectedTools.includes("bengacoon_report_review")
     ? "Before each Bengacoon reviewer, report started with bengacoon_report_review. Report completed with its verdict and bounded findings after it finishes; the review-gate receipt remains commit authority."
     : undefined;
-  return [rule, language, voice, contextStoreAdapter(selectedTools, dir), rule ? scriptsLocation(scriptsDir) : undefined, reviewReporter]
+  return [rule, language, voice, contextStoreAdapter(selectedTools, dir), rule ? scriptsLocation(scriptsDir) : undefined, deliveryReporter, reviewReporter]
     .filter(Boolean)
     .join("\n\n");
 }

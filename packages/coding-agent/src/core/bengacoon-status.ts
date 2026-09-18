@@ -3,6 +3,7 @@ import type { ExtensionStatusMetadata } from "./footer-data-provider.ts";
 
 const JOBS_STATUS_KEY = "bengacoon-jobs";
 const QUOTA_STATUS_KEY = "bengacoon-quota";
+const DELIVERY_STATUS_KEY = "bengacoon-delivery";
 
 interface StatusSession {
 	getSessionStats(): SessionStats;
@@ -30,6 +31,13 @@ export interface BengacoonStatusSnapshot {
 		readonly failed: number;
 		readonly details: readonly string[];
 	};
+	readonly delivery: {
+		readonly title: string;
+		readonly criterion: string;
+		readonly verification: string;
+		readonly receipt: "missing" | "matches" | "stale" | "unavailable";
+		readonly nextStep: string;
+	} | null;
 	readonly quota: {
 		readonly plan: string | null;
 		readonly limits: readonly {
@@ -52,6 +60,34 @@ function parseNonNegativeInteger(value: string | undefined): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+function parseDeliveryStatus(value: string | undefined): BengacoonStatusSnapshot["delivery"] {
+	if (!value) return null;
+	try {
+		const parsed: unknown = JSON.parse(value);
+		if (
+			!isRecord(parsed) ||
+			typeof parsed.title !== "string" ||
+			typeof parsed.criterion !== "string" ||
+			typeof parsed.verification !== "string" ||
+			typeof parsed.nextStep !== "string" ||
+			(parsed.receipt !== "missing" &&
+				parsed.receipt !== "matches" &&
+				parsed.receipt !== "stale" &&
+				parsed.receipt !== "unavailable")
+		)
+			return null;
+		return {
+			title: parsed.title,
+			criterion: parsed.criterion,
+			verification: parsed.verification,
+			receipt: parsed.receipt,
+			nextStep: parsed.nextStep,
+		};
+	} catch {
+		return null;
+	}
 }
 
 function parseQuotaUsage(value: string | undefined): BengacoonStatusSnapshot["quota"] {
@@ -118,6 +154,7 @@ export function createBengacoonStatusSnapshot(
 	const metadata = metadataSource.getExtensionStatusMetadata();
 	const jobMetadata = metadata.get(JOBS_STATUS_KEY);
 	const quotaMetadata = metadata.get(QUOTA_STATUS_KEY);
+	const deliveryMetadata = metadata.get(DELIVERY_STATUS_KEY);
 
 	return {
 		branch: metadataSource.getGitBranch(),
@@ -133,6 +170,7 @@ export function createBengacoonStatusSnapshot(
 			failed: parseNonNegativeInteger(jobMetadata?.values?.failed),
 			details: [...(jobMetadata?.lines ?? [])],
 		},
+		delivery: parseDeliveryStatus(deliveryMetadata?.values?.delivery),
 		quota: parseQuotaUsage(quotaMetadata?.values?.usage),
 	};
 }

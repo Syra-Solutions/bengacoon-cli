@@ -8,6 +8,13 @@ const snapshot: BengacoonStatusSnapshot = {
 	branch: "feat/responsive-bengacoon-sidebar",
 	usage: { inputTokens: 12_400, outputTokens: 2_100, cost: 0.42 },
 	context: { remainingTokens: 75_000, remainingPercent: 75 },
+	delivery: {
+		title: "Delivery observability",
+		criterion: "The sidebar shows the active work item.",
+		verification: "prove-red proven",
+		receipt: "matches",
+		nextStep: "Commit the delivery unit.",
+	},
 	jobs: {
 		total: 4,
 		active: 1,
@@ -50,6 +57,10 @@ describe("Bengacoon status component", () => {
 		expect(text).toContain("│ Input");
 		expect(text).toContain("╭─ ◷ Context");
 		expect(text).toContain("│ Remaining");
+		expect(text).toContain("╭─ ▣ Delivery");
+		expect(text).toContain("│ Work     Delivery observability");
+		expect(text).toContain("│ Verify   prove-red proven");
+		expect(text).toContain("│ Receipt  matches");
 		expect(text).toContain("╭─ ↻ Jobs");
 		expect(text).toContain("│ Summary  4 total · 1 active · 1");
 		expect(text).toContain("│          failed");
@@ -86,6 +97,7 @@ describe("Bengacoon status component", () => {
 		expect(lines.join("\n")).toContain("Branch:");
 		expect(lines.join("\n")).toContain("AI:");
 		expect(lines.join("\n")).toContain("Context:");
+		expect(lines.join("\n")).toContain("Delivery:");
 		expect(lines.join("\n")).toContain("Jobs:");
 		expect(lines.join("\n")).toContain("a1b2c3d4 running");
 		expect(lines.join("\n")).toContain("e5f6a7b8 failed");

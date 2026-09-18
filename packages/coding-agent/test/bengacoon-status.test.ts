@@ -68,6 +68,7 @@ describe("Bengacoon status snapshot", () => {
 				failed: 1,
 				details: ["a1b2c3d4 running Repository exploration", "e5f6a7b8 failed Repository verification"],
 			},
+			delivery: null,
 			quota: {
 				plan: "pro",
 				limits: [
@@ -77,6 +78,53 @@ describe("Bengacoon status snapshot", () => {
 						windows: [{ label: "5h", usedPercent: 40, remainingPercent: 60, resetAt: 1_788_620_161_000 }],
 					},
 				],
+			},
+		});
+	});
+
+	it("includes reported delivery progress and its receipt state", () => {
+		const snapshot = createBengacoonStatusSnapshot(
+			{
+				getSessionStats: () => ({
+					sessionFile: undefined,
+					sessionId: "session-1",
+					userMessages: 0,
+					assistantMessages: 0,
+					toolCalls: 0,
+					toolResults: 0,
+					totalMessages: 0,
+					tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					cost: 0,
+					contextUsage: { tokens: null, contextWindow: 1000, percent: null },
+				}),
+			},
+			{
+				getGitBranch: () => null,
+				getExtensionStatusMetadata: () =>
+					new Map([
+						[
+							"bengacoon-delivery",
+							{
+								values: {
+									delivery: JSON.stringify({
+										title: "Delivery observability",
+										criterion: "The sidebar shows the active work item.",
+										verification: "prove-red proven",
+										receipt: "matches",
+										nextStep: "Commit the delivery unit.",
+									}),
+								},
+							},
+						],
+					]),
+			},
+		);
+
+		expect(snapshot).toMatchObject({
+			delivery: {
+				title: "Delivery observability",
+				verification: "prove-red proven",
+				receipt: "matches",
 			},
 		});
 	});
