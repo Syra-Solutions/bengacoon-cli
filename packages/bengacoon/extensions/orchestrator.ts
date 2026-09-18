@@ -3,11 +3,27 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readModelAssignments, resolveBengacoonAgentDir, skillTargetFromInput, THINKING_LEVELS, writeModelAssignments } from "./models/config.ts";
+import { WorkflowNoticeCard } from "./workflow-ui.ts";
 
 // Everything here is in the system prompt on every turn, including turns that have nothing to
 // do with changing code. That is why the rule is a pointer to the router rather than the
 // workflow itself, and why each piece is kept short.
 const ORCHESTRATOR_DIR = fileURLToPath(new URL("../orchestrator/", import.meta.url));
+const WORKFLOW_NOTICE_TYPE = "bengacoon-workflow-notice";
+
+function deliverWorkflowNotice(pi, ctx, type, message) {
+  try {
+    pi.sendMessage({
+      customType: WORKFLOW_NOTICE_TYPE,
+      content: message,
+      display: true,
+      details: { type },
+    }, { deliverAs: "followUp", triggerTurn: false });
+  } catch {
+    // A lost transcript card must not hide a workflow warning or error.
+    ctx?.ui?.notify(message, type);
+  }
+}
 
 function readOrUndefined(path) {
   try {
@@ -81,6 +97,11 @@ export default function orchestrator(pi) {
   let pendingSkillTarget;
   let skillOverride;
 
+  pi.registerMessageRenderer(WORKFLOW_NOTICE_TYPE, (message, { outputPad }, theme) => {
+    const type = typeof message.details?.type === "string" ? message.details.type : "info";
+    return new WorkflowNoticeCard(type, message.content, theme, outputPad);
+  });
+
   // The agent's shell commands inherit this process's environment, read fresh on every command,
   // so setting it once at load makes `node "$SYRA_SCRIPTS"/review-gate.mjs` resolve in any project.
   // Ours to set: the name is this workflow's, and an inherited value may point at another install.
@@ -93,7 +114,7 @@ export default function orchestrator(pi) {
       const notice = error
         ? { type: "warning", message: `Review gate hook could not be checked: ${error.message.split("\n")[0]}` }
         : hookNotice(stdout);
-      if (notice) ctx?.ui?.notify(notice.message, notice.type);
+      if (notice) deliverWorkflowNotice(pi, ctx, notice.type, notice.message);
     });
   });
 
@@ -119,7 +140,7 @@ export default function orchestrator(pi) {
         }
       } catch (error) {
         skillOverride = undefined;
-        ctx.ui.notify(`Syra model assignment was not applied: ${error.message}`, "warning");
+        deliverWorkflowNotice(pi, ctx, "warning", `Syra model assignment was not applied: ${error.message}`);
       }
     }
 
@@ -153,7 +174,7 @@ export default function orchestrator(pi) {
         if (choice === "Clear assignment") {
           delete assignments[target];
           await writeModelAssignments(profileDir, assignments, new Set(targets));
-          ctx.ui.notify(`Cleared Syra model assignment for ${target}.`, "info");
+          deliverWorkflowNotice(pi, ctx, "info", `Cleared Syra model assignment for ${target}.`);
           continue;
         }
         if (!models.has(choice)) continue;
@@ -161,7 +182,7 @@ export default function orchestrator(pi) {
         if (!thinking) continue;
         assignments[target] = { model: choice, thinking };
         await writeModelAssignments(profileDir, assignments, new Set(targets));
-        ctx.ui.notify(`Saved Syra model assignment for ${target}.`, "info");
+        deliverWorkflowNotice(pi, ctx, "info", `Saved Syra model assignment for ${target}.`);
       }
     },
   });
@@ -171,6 +192,6 @@ export default function orchestrator(pi) {
     skillOverride = undefined;
     if (!previous) return;
     if (await pi.setModel(previous.model)) pi.setThinkingLevel(previous.thinking);
-    else ctx.ui.notify("Syra could not restore the model selected before the skill.", "error");
+    else deliverWorkflowNotice(pi, ctx, "error", "Syra could not restore the model selected before the skill.");
   });
 }

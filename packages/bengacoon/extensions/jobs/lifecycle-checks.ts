@@ -145,6 +145,7 @@ await assert.rejects(
 
 const orchestrationHandlers = new Map();
 const orchestrationCommands = new Map();
+const orchestrationRenderers = new Map();
 const selectedModels = [];
 const selectedThinking = [];
 orchestrator({
@@ -153,6 +154,9 @@ orchestrator({
   },
   registerCommand(name, command) {
     orchestrationCommands.set(name, command);
+  },
+  registerMessageRenderer(name, renderer) {
+    orchestrationRenderers.set(name, renderer);
   },
   async setModel(model) {
     selectedModels.push(model);
@@ -165,6 +169,7 @@ orchestrator({
     selectedThinking.push(level);
   },
 });
+assert.equal(typeof orchestrationRenderers.get("bengacoon-workflow-notice"), "function");
 const originalModel = { provider: "openai", id: "gpt-5.6-sol" };
 const configuredModel = { provider: "openai", id: "gpt-5.6-terra" };
 const modelContext = {
