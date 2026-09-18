@@ -17,7 +17,10 @@ export function loadDeliveryState(cwd) {
       typeof state?.title !== "string" ||
       typeof state?.criterion !== "string" ||
       typeof state?.nextStep !== "string" ||
-      typeof state?.verification !== "string"
+      typeof state?.verification !== "string" ||
+      typeof state?.commitBase !== "string" ||
+      !/^[a-f0-9]{64}$/.test(state?.commitDiff) ||
+      !["active", "committed", "blocked", "awaiting-human"].includes(state?.state)
     )
       return undefined;
     return state;
@@ -66,6 +69,31 @@ export function activeDeliveryWork(cwd, workFile) {
   const delivery = parseActiveDeliveryWork(readFileSync(file, "utf8"));
   if (!delivery) throw new Error(`Delivery work record has no unfinished item: ${workFile}`);
   return delivery;
+}
+
+function hashDiff(cwd, args) {
+  try {
+    const diff = execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+    return diff.trim() ? createHash("sha256").update(diff).digest("hex") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function stagedDiffHash(cwd) {
+  return hashDiff(cwd, ["diff", "--cached"]);
+}
+
+export function headCommitDiffHash(cwd) {
+  return hashDiff(cwd, ["diff", "HEAD^", "HEAD"]);
+}
+
+export function headCommitParent(cwd) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD^"], { cwd, encoding: "utf8", stdio: "pipe" }).trim();
+  } catch {
+    return undefined;
+  }
 }
 
 export function receiptState(cwd) {

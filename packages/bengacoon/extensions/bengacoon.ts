@@ -1,22 +1,23 @@
-import { Type } from "typebox";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
+import { Type } from "typebox";
 import { formatTerminalCompletion, JobManager, validateTask } from "./jobs/runner.ts";
 import { canonicalWorktree, JobStore, resolveProfileDir } from "./jobs/storage.ts";
 import { formatDetail, formatList, jobStatusSnapshot, jobStatusUpdates, statusText } from "./jobs/format.ts";
 import { JobCard, JobsView } from "./jobs/ui.ts";
 import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.ts";
 import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
-import { activeDeliveryWork, receiptState, restoreDeliveryState, saveDeliveryState } from "./delivery.ts";
+import { activeDeliveryWork, headCommitDiffHash, headCommitParent, loadDeliveryState, receiptState, restoreDeliveryState, saveDeliveryState, stagedDiffHash } from "./delivery.ts";
 import { SessionChanges } from "./changes.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
 const STATUS_SIGNAL = "BENGACOON_STATUS: extension=loaded";
+const WORKFLOW_NOTICE_TYPE = "bengacoon-workflow-notice";
 // This must match the model registry provider that owns the Codex OAuth token.
 const CODEX_PROVIDER = "openai-codex";
 // Avoid a quota request after every turn while refreshing a continuing session promptly.
 const QUOTA_REFRESH_MS = 5 * 60_000;
-
 export default function bengacoon(pi) {
   let manager;
   let initialization;
@@ -263,6 +264,18 @@ export default function bengacoon(pi) {
     }
   });
 
+  pi.on("agent_end", (_event, ctx) => {
+    const delivery = loadDeliveryState(ctx.cwd);
+    if (!delivery || delivery.state !== "active") return;
+    if (headCommitParent(ctx.cwd) === delivery.commitBase && headCommitDiffHash(ctx.cwd) === delivery.commitDiff) {
+      const committed = { ...delivery, state: "committed", verification: "committed", receipt: receiptState(ctx.cwd) };
+      saveDeliveryState(ctx.cwd, committed);
+      setDeliveryStatus(ctx, committed);
+      return;
+    }
+    pi.sendMessage({ customType: WORKFLOW_NOTICE_TYPE, content: `Delivery remains active. Continue: ${delivery.nextStep}`, display: false, details: { type: "warning" } }, { deliverAs: "followUp", triggerTurn: false });
+  });
+
   pi.on("session_shutdown", async () => {
     quotaSession = undefined;
     deliverySession = undefined;
@@ -283,10 +296,34 @@ export default function bengacoon(pi) {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const work = activeDeliveryWork(ctx.cwd, params.workFile);
-      const delivery = { ...work, verification: params.verification, receipt: receiptState(ctx.cwd) };
+      const commitDiff = stagedDiffHash(ctx.cwd);
+      if (!commitDiff) throw new Error("Reporting a delivery requires a staged work-unit diff.");
+      const delivery = {
+        ...work,
+        state: "active",
+        commitBase: execFileSync("git", ["rev-parse", "HEAD"], { cwd: ctx.cwd, encoding: "utf8" }).trim(),
+        commitDiff,
+        verification: params.verification,
+        receipt: receiptState(ctx.cwd),
+      };
       saveDeliveryState(ctx.cwd, delivery);
       setDeliveryStatus(ctx, delivery);
       return { content: [{ type: "text", text: `Reported delivery: ${delivery.nextStep} (${delivery.verification}; receipt ${delivery.receipt}).` }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "bengacoon_finish_delivery",
+    label: "Finish Bengacoon Delivery",
+    description: "Mark the active delivery unit blocked or awaiting a specific human decision. A commit is detected separately.",
+    parameters: Type.Object({ state: Type.String({ enum: ["blocked", "awaiting-human"] }), reason: Type.String({ minLength: 1, maxLength: 2_000 }) }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const delivery = loadDeliveryState(ctx.cwd);
+      if (!delivery || delivery.state !== "active") throw new Error("No active Bengacoon delivery unit to finish.");
+      const next = { ...delivery, state: params.state, nextStep: params.reason, receipt: receiptState(ctx.cwd) };
+      saveDeliveryState(ctx.cwd, next);
+      setDeliveryStatus(ctx, next);
+      return { content: [{ type: "text", text: `Delivery ${params.state}: ${params.reason}` }] };
     },
   });
 
