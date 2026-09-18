@@ -7,7 +7,7 @@ import { formatDetail, formatList, jobStatusSnapshot, jobStatusUpdates, statusTe
 import { JobCard, JobsView } from "./jobs/ui.ts";
 import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.ts";
 import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
-import { activeDeliveryWork, loadDeliveryState, receiptState, saveDeliveryState } from "./delivery.ts";
+import { activeDeliveryWork, receiptState, restoreDeliveryState, saveDeliveryState } from "./delivery.ts";
 import { SessionChanges } from "./changes.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
@@ -226,8 +226,8 @@ export default function bengacoon(pi) {
 
   pi.on("session_start", async (_event, ctx) => {
     setQuotaStatus(ctx, undefined);
-    const delivery = loadDeliveryState(ctx.cwd);
-    if (delivery) setDeliveryStatus(ctx, { ...delivery, receipt: receiptState(ctx.cwd) });
+    const delivery = restoreDeliveryState(ctx.cwd);
+    if (delivery) setDeliveryStatus(ctx, delivery);
     const session = Symbol("bengacoon-job-delivery");
     quotaSession = session;
     quotaRefreshAt = 0;

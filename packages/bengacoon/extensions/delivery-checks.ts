@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import bengacoon from "./bengacoon.ts";
-import { loadDeliveryState, parseActiveDeliveryWork, saveDeliveryState } from "./delivery.ts";
+import { loadDeliveryState, parseActiveDeliveryWork, restoreDeliveryState, saveDeliveryState } from "./delivery.ts";
 
 assert.deepEqual(
   parseActiveDeliveryWork(`# Delivery observability
@@ -56,6 +56,15 @@ try {
     verification: "check passed",
     receipt: "matches",
   });
+  assert.deepEqual(restoreDeliveryState(worktree), {
+    title: "Delivery observability",
+    criterion: "the active item is visible",
+    nextStep: "render the sidebar card",
+    verification: "check passed",
+    receipt: "matches",
+  });
+  execFileSync("git", ["reset", "--quiet"], { cwd: worktree });
+  assert.equal(restoreDeliveryState(worktree).receipt, "missing");
   const statuses = new Map();
   await tools.get("bengacoon_report_delivery").execute("call", { workFile: ".syra/work/active.md", verification: "check passed" }, undefined, undefined, {
     cwd: worktree,
@@ -66,7 +75,7 @@ try {
     criterion: "the active item is visible",
     nextStep: "render the sidebar card",
     verification: "check passed",
-    receipt: "matches",
+    receipt: "missing",
   });
 } finally {
   rmSync(worktree, { recursive: true, force: true });

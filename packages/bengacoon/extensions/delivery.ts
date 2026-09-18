@@ -26,6 +26,11 @@ export function loadDeliveryState(cwd) {
   }
 }
 
+export function restoreDeliveryState(cwd) {
+  const state = loadDeliveryState(cwd);
+  return state ? { ...state, receipt: receiptState(cwd) } : undefined;
+}
+
 export function saveDeliveryState(cwd, state) {
   const path = deliveryStatePath(cwd);
   mkdirSync(resolve(path, ".."), { recursive: true });
