@@ -1,4 +1,6 @@
 import { Type } from "typebox";
+import { readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import { formatTerminalCompletion, JobManager, validateTask } from "./jobs/runner.ts";
 import { canonicalWorktree, JobStore, resolveProfileDir } from "./jobs/storage.ts";
 import { formatDetail, formatList, jobStatusSnapshot, jobStatusUpdates, statusText } from "./jobs/format.ts";
@@ -6,6 +8,7 @@ import { JobCard, JobsView } from "./jobs/ui.ts";
 import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.ts";
 import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
 import { activeDeliveryWork, receiptState } from "./delivery.ts";
+import { SessionChanges } from "./changes.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
 const STATUS_SIGNAL = "BENGACOON_STATUS: extension=loaded";
@@ -23,6 +26,7 @@ export default function bengacoon(pi) {
   let quotaRefreshAt = 0;
   let hasFetchedQuota = false;
   let knownJobStates;
+  let sessionChanges = new SessionChanges();
 
   const deliverJobCard = (record, summary, terminal) => {
     try {
@@ -53,6 +57,14 @@ export default function bengacoon(pi) {
         active: String(snapshot.active),
         failed: String(snapshot.failed),
       },
+    });
+  };
+
+  const setChangesStatus = (ctx) => {
+    const snapshot = sessionChanges.summary();
+    ctx.ui.setStatus("bengacoon-changes", `changes: ${snapshot.total} files; +${snapshot.added} -${snapshot.removed}`, {
+      lines: snapshot.details,
+      values: { changes: JSON.stringify(snapshot) },
     });
   };
 
@@ -175,6 +187,34 @@ export default function bengacoon(pi) {
     });
   });
 
+  pi.on("tool_call", (event, ctx) => {
+    if ((event.toolName !== "edit" && event.toolName !== "write") || typeof event.input.path !== "string") return;
+    const path = resolve(ctx.cwd, event.input.path);
+    const displayPath = relative(ctx.cwd, path);
+    if (displayPath.startsWith("..")) return;
+    try {
+      const contents = readFileSync(path, "utf8");
+      if (Buffer.byteLength(contents) <= 64 * 1024) sessionChanges.captureBefore(displayPath, contents);
+    } catch {
+      sessionChanges.captureBefore(displayPath, "");
+    }
+  });
+
+  pi.on("tool_result", (event, ctx) => {
+    if (event.isError || (event.toolName !== "edit" && event.toolName !== "write") || typeof event.input.path !== "string") return;
+    const path = resolve(ctx.cwd, event.input.path);
+    const displayPath = relative(ctx.cwd, path);
+    if (displayPath.startsWith("..")) return;
+    try {
+      const contents = readFileSync(path, "utf8");
+      if (Buffer.byteLength(contents) > 64 * 1024) return;
+      sessionChanges.captureAfter(displayPath, contents);
+      setChangesStatus(ctx);
+    } catch {
+      // A successful tool result without a readable local file has no attributable snapshot.
+    }
+  });
+
   pi.on("after_provider_response", (event, ctx) => {
     if (ctx.model?.provider !== CODEX_PROVIDER) return;
     if (!hasFetchedQuota) {
@@ -193,6 +233,8 @@ export default function bengacoon(pi) {
     requestQuotaRefresh(ctx, session);
     deliverySession = session;
     knownJobStates = undefined;
+    sessionChanges = new SessionChanges();
+    setChangesStatus(ctx);
     manager = undefined;
     showJobDetail = async (id) => {
       if (deliverySession !== session || !manager) return;
@@ -308,6 +350,19 @@ export default function bengacoon(pi) {
         return;
       }
       await showJobDetail?.(input);
+    },
+  });
+
+  pi.registerCommand("bengacoon-changes", {
+    description: "Show changes attributed to successful write and edit tools in this session",
+    handler: async (args, ctx) => {
+      const path = args.trim();
+      const text = path ? sessionChanges.detail(path) : sessionChanges.summary().details.join("\n");
+      if (!text) {
+        ctx.ui.notify("No changes are attributed to this session.", "info");
+        return;
+      }
+      await showJobs(ctx, text);
     },
   });
 

@@ -8,6 +8,12 @@ const snapshot: BengacoonStatusSnapshot = {
 	branch: "feat/responsive-bengacoon-sidebar",
 	usage: { inputTokens: 12_400, outputTokens: 2_100, cost: 0.42 },
 	context: { remainingTokens: 75_000, remainingPercent: 75 },
+	changes: {
+		total: 2,
+		added: 42,
+		removed: 7,
+		details: ["api.ts +31 -4", "test.ts +11 -3"],
+	},
 	delivery: {
 		title: "Delivery observability",
 		criterion: "The sidebar shows the active work item.",
@@ -61,6 +67,9 @@ describe("Bengacoon status component", () => {
 		expect(text).toContain("│ Work     Delivery observability");
 		expect(text).toContain("│ Verify   prove-red proven");
 		expect(text).toContain("│ Receipt  matches");
+		expect(text).toContain("╭─ ✎ Changes");
+		expect(text).toContain("│ Summary  2 files · +42 -7");
+		expect(text).toContain("│ File     api.ts +31 -4");
 		expect(text).toContain("╭─ ↻ Jobs");
 		expect(text).toContain("│ Summary  4 total · 1 active · 1");
 		expect(text).toContain("│          failed");

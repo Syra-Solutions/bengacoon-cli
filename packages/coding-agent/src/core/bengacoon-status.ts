@@ -4,6 +4,7 @@ import type { ExtensionStatusMetadata } from "./footer-data-provider.ts";
 const JOBS_STATUS_KEY = "bengacoon-jobs";
 const QUOTA_STATUS_KEY = "bengacoon-quota";
 const DELIVERY_STATUS_KEY = "bengacoon-delivery";
+const CHANGES_STATUS_KEY = "bengacoon-changes";
 
 interface StatusSession {
 	getSessionStats(): SessionStats;
@@ -29,6 +30,12 @@ export interface BengacoonStatusSnapshot {
 		readonly total: number;
 		readonly active: number;
 		readonly failed: number;
+		readonly details: readonly string[];
+	};
+	readonly changes: {
+		readonly total: number;
+		readonly added: number;
+		readonly removed: number;
 		readonly details: readonly string[];
 	};
 	readonly delivery: {
@@ -60,6 +67,22 @@ function parseNonNegativeInteger(value: string | undefined): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+function parseChanges(value: string | undefined): BengacoonStatusSnapshot["changes"] {
+	if (!value) return { total: 0, added: 0, removed: 0, details: [] };
+	try {
+		const parsed: unknown = JSON.parse(value);
+		if (!isRecord(parsed) || !Array.isArray(parsed.details)) return { total: 0, added: 0, removed: 0, details: [] };
+		return {
+			total: typeof parsed.total === "number" && parsed.total >= 0 ? parsed.total : 0,
+			added: typeof parsed.added === "number" && parsed.added >= 0 ? parsed.added : 0,
+			removed: typeof parsed.removed === "number" && parsed.removed >= 0 ? parsed.removed : 0,
+			details: parsed.details.filter((detail): detail is string => typeof detail === "string"),
+		};
+	} catch {
+		return { total: 0, added: 0, removed: 0, details: [] };
+	}
 }
 
 function parseDeliveryStatus(value: string | undefined): BengacoonStatusSnapshot["delivery"] {
@@ -155,6 +178,7 @@ export function createBengacoonStatusSnapshot(
 	const jobMetadata = metadata.get(JOBS_STATUS_KEY);
 	const quotaMetadata = metadata.get(QUOTA_STATUS_KEY);
 	const deliveryMetadata = metadata.get(DELIVERY_STATUS_KEY);
+	const changesMetadata = metadata.get(CHANGES_STATUS_KEY);
 
 	return {
 		branch: metadataSource.getGitBranch(),
@@ -170,6 +194,7 @@ export function createBengacoonStatusSnapshot(
 			failed: parseNonNegativeInteger(jobMetadata?.values?.failed),
 			details: [...(jobMetadata?.lines ?? [])],
 		},
+		changes: parseChanges(changesMetadata?.values?.changes),
 		delivery: parseDeliveryStatus(deliveryMetadata?.values?.delivery),
 		quota: parseQuotaUsage(quotaMetadata?.values?.usage),
 	};

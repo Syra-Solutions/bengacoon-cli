@@ -56,6 +56,14 @@ function contextUsageBar(snapshot: BengacoonStatusSnapshot): string {
 	return remainingPercent === null ? "Unavailable" : usageBar(100 - remainingPercent);
 }
 
+function changesRows(snapshot: BengacoonStatusSnapshot): [label: string, value: string][] {
+	const { total, added, removed, details } = snapshot.changes;
+	return [
+		["Summary", `${total} files · +${added} -${removed}`],
+		...details.map((detail) => ["File", detail] as [string, string]),
+	];
+}
+
 function deliveryRows(snapshot: BengacoonStatusSnapshot, collapsed: boolean): [label: string, value: string][] {
 	const delivery = snapshot.delivery;
 	if (delivery === null) return [["Status", "No active delivery unit"]];
@@ -128,6 +136,8 @@ function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number, delivery
 		"",
 		...sidebarCard("▣ Delivery", deliveryRows(snapshot, deliveryCollapsed), safeWidth),
 		"",
+		...sidebarCard("✎ Changes", changesRows(snapshot), safeWidth),
+		"",
 		...sidebarCard(
 			"↻ Jobs",
 			[
@@ -149,6 +159,7 @@ function footerLines(snapshot: BengacoonStatusSnapshot, width: number): string[]
 			`AI: input ${formatTokens(snapshot.usage.inputTokens)} · output ${formatTokens(snapshot.usage.outputTokens)} · $${snapshot.usage.cost.toFixed(3)}`,
 			`Context: ${contextRemaining(snapshot)} remaining`,
 			`Delivery: ${deliverySummary(snapshot)}`,
+			`Changes: ${snapshot.changes.total} files · +${snapshot.changes.added} -${snapshot.changes.removed}`,
 			`Jobs: ${jobSummary(snapshot)}`,
 			...details,
 			`Quota: ${quotaSummary(snapshot)}`,

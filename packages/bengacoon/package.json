@@ -12,7 +12,7 @@
 		"skills"
 	],
 	"scripts": {
-		"test": "node extensions/quota-checks.ts && node extensions/delivery-checks.ts && node extensions/jobs/ui-checks.ts && node extensions/workflow-ui-checks.ts && node extensions/jobs/lifecycle-checks.ts && node extensions/jobs/runtime-checks.ts",
+		"test": "node extensions/quota-checks.ts && node extensions/delivery-checks.ts && node extensions/changes-checks.ts && node extensions/jobs/ui-checks.ts && node extensions/workflow-ui-checks.ts && node extensions/jobs/lifecycle-checks.ts && node extensions/jobs/runtime-checks.ts",
 		"check:syntax": "node scripts/check-syntax.mjs",
 		"check:workflow": "node scripts/workflow-checks.mjs",
 		"check": "npm run check:syntax && npm test && npm run check:workflow"
