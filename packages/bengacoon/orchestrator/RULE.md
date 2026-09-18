@@ -17,3 +17,10 @@ does.**
 No change is small enough to be exempt. The router's cheapest route has no
 preparation at all, so "this one is trivial" is an answer the router already
 accepts — never a reason to route around it.
+
+# Continuous work
+
+An authorized work unit continues until it is committed, a check or review fails,
+or a new human decision is required. Do not end a turn merely to report progress.
+Ask and wait only for an unresolved human decision, then resume the authorized
+unit after the answer. A blocked unit reports the redacted command output that blocked it.
