@@ -3,7 +3,7 @@
 - [x] rebrand the CLI and isolate its profile
       done: invoking `bengacoon --version` identifies Bengacoon and resolves profile state under `~/.bengacoon/agent`, while an installed `pi` continues using its existing profile
 
-- [ ] ship the Bengacoon workflow as a built-in package
+- [x] ship the Bengacoon workflow as a built-in package
       done: a clean Bengacoon profile starts with the packaged workflow, skills, jobs, and model-assignment command available without installing another package
 
 - [ ] add a structural sidebar slot to fullscreen layout
