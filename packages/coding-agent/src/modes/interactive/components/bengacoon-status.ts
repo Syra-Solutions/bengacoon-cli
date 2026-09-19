@@ -1,4 +1,4 @@
-import { type Component, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { type Component, type TuiMouseEvent, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { BengacoonStatusSnapshot } from "../../../core/bengacoon-status.ts";
 import { theme } from "../theme/theme.ts";
 import { formatTokens } from "./footer.ts";
@@ -57,17 +57,17 @@ function contextUsageBar(snapshot: BengacoonStatusSnapshot): string {
 }
 
 function changesRows(snapshot: BengacoonStatusSnapshot): [label: string, value: string][] {
-	const { total, added, removed, details } = snapshot.changes;
+	const { unavailable, total, added, removed, details } = snapshot.changes;
+	if (unavailable) return [["Summary", "Unavailable"]];
 	return [
 		["Summary", `${total} files · +${added} -${removed}`],
 		...details.map((detail) => ["File", detail] as [string, string]),
 	];
 }
 
-function deliveryRows(snapshot: BengacoonStatusSnapshot, collapsed: boolean): [label: string, value: string][] {
+function deliveryRows(snapshot: BengacoonStatusSnapshot): [label: string, value: string][] {
 	const delivery = snapshot.delivery;
 	if (delivery === null) return [["Status", "No active delivery unit"]];
-	if (collapsed) return [["Work", delivery.title]];
 	return [
 		["Work", delivery.title],
 		["Acceptance", delivery.criterion],
@@ -88,6 +88,11 @@ function jobSummary(snapshot: BengacoonStatusSnapshot): string {
 	return `${snapshot.jobs.total} total · ${snapshot.jobs.active} active · ${snapshot.jobs.failed} failed`;
 }
 
+function changesSummary(snapshot: BengacoonStatusSnapshot): string {
+	const { unavailable, total, added, removed } = snapshot.changes;
+	return unavailable ? "Unavailable" : `${total} files · +${added} -${removed}`;
+}
+
 function wrapLogicalLines(lines: readonly string[], width: number): string[] {
 	const safeWidth = Math.max(1, width);
 	return lines.flatMap((line) => (line === "" ? [""] : wrapTextWithAnsi(line, safeWidth)));
@@ -102,53 +107,66 @@ function sidebarRow(label: string, value: string, width: number): string[] {
 	return valueLines.map((line, index) => `${index === 0 ? firstPrefix : restPrefix}${theme.fg("text", line)}`);
 }
 
-function sidebarCard(title: string, rows: readonly [label: string, value: string][], width: number): string[] {
-	return [
-		theme.fg("accent", `╭─ ${title}`),
-		...rows.flatMap(([label, value]) => sidebarRow(label, value, width)),
-		theme.fg("border", `╰${"─".repeat(Math.max(0, width - 1))}`),
-	];
+type SidebarCardId = "git" | "usage" | "context" | "delivery" | "changes" | "jobs" | "quota";
+
+interface SidebarCard {
+	readonly id: SidebarCardId;
+	readonly title: string;
+	readonly rows: readonly [label: string, value: string][];
 }
 
-function sidebarLines(snapshot: BengacoonStatusSnapshot, width: number, deliveryCollapsed: boolean): string[] {
-	const safeWidth = Math.max(1, width);
+function sidebarCards(snapshot: BengacoonStatusSnapshot): readonly SidebarCard[] {
 	return [
-		...sidebarCard(" Git", [["Branch", snapshot.branch ?? "Unavailable"]], safeWidth),
-		"",
-		...sidebarCard(
-			"⚙ AI usage",
-			[
+		{ id: "git", title: " Git", rows: [["Branch", snapshot.branch ?? "Unavailable"]] },
+		{
+			id: "usage",
+			title: "⚙ AI usage",
+			rows: [
 				["Input", formatTokens(snapshot.usage.inputTokens)],
 				["Output", formatTokens(snapshot.usage.outputTokens)],
 				["Cost", `$${snapshot.usage.cost.toFixed(3)}`],
 			],
-			safeWidth,
-		),
-		"",
-		...sidebarCard(
-			"◷ Context",
-			[
+		},
+		{
+			id: "context",
+			title: "◷ Context",
+			rows: [
 				["Remaining", contextRemaining(snapshot)],
 				["Used", contextUsageBar(snapshot)],
 			],
-			safeWidth,
-		),
-		"",
-		...sidebarCard("▣ Delivery", deliveryRows(snapshot, deliveryCollapsed), safeWidth),
-		"",
-		...sidebarCard("✎ Changes", changesRows(snapshot), safeWidth),
-		"",
-		...sidebarCard(
-			"↻ Jobs",
-			[
+		},
+		{ id: "delivery", title: "▣ Delivery", rows: deliveryRows(snapshot) },
+		{ id: "changes", title: "✎ Changes", rows: changesRows(snapshot) },
+		{
+			id: "jobs",
+			title: "↻ Jobs",
+			rows: [
 				["Summary", jobSummary(snapshot)],
 				...snapshot.jobs.details.map((detail) => ["Detail", detail] as [string, string]),
 			],
-			safeWidth,
-		),
-		"",
-		...sidebarCard("◐ Quota", quotaRows(snapshot), safeWidth),
+		},
+		{ id: "quota", title: "◐ Quota", rows: quotaRows(snapshot) },
 	];
+}
+
+function sidebarCard(card: SidebarCard, width: number, collapsed: boolean): string[] {
+	return [
+		theme.fg("accent", `╭─ ${collapsed ? "▶" : "▼"} ${card.title}`),
+		...(collapsed ? [] : card.rows.flatMap(([label, value]) => sidebarRow(label, value, width))),
+		theme.fg("border", `╰${"─".repeat(Math.max(0, width - 1))}`),
+	];
+}
+
+function sidebarLines(
+	snapshot: BengacoonStatusSnapshot,
+	width: number,
+	collapsedCards: ReadonlySet<SidebarCardId>,
+): string[] {
+	const safeWidth = Math.max(1, width);
+	return sidebarCards(snapshot).flatMap((card, index, cards) => [
+		...sidebarCard(card, safeWidth, collapsedCards.has(card.id)),
+		...(index === cards.length - 1 ? [] : [""]),
+	]);
 }
 
 function footerLines(snapshot: BengacoonStatusSnapshot, width: number): string[] {
@@ -159,7 +177,7 @@ function footerLines(snapshot: BengacoonStatusSnapshot, width: number): string[]
 			`AI: input ${formatTokens(snapshot.usage.inputTokens)} · output ${formatTokens(snapshot.usage.outputTokens)} · $${snapshot.usage.cost.toFixed(3)}`,
 			`Context: ${contextRemaining(snapshot)} remaining`,
 			`Delivery: ${deliverySummary(snapshot)}`,
-			`Changes: ${snapshot.changes.total} files · +${snapshot.changes.added} -${snapshot.changes.removed}`,
+			`Changes: ${changesSummary(snapshot)}`,
 			`Jobs: ${jobSummary(snapshot)}`,
 			...details,
 			`Quota: ${quotaSummary(snapshot)}`,
@@ -172,7 +190,7 @@ export class BengacoonStatusComponent implements Component {
 	private readonly getSnapshot: () => BengacoonStatusSnapshot;
 	private readonly layout: BengacoonStatusLayout;
 	private readonly isVisible: () => boolean;
-	private deliveryCollapsed = false;
+	private collapsedCards = new Set<SidebarCardId>();
 
 	constructor(
 		getSnapshot: () => BengacoonStatusSnapshot,
@@ -184,15 +202,30 @@ export class BengacoonStatusComponent implements Component {
 		this.isVisible = isVisible;
 	}
 
-	toggleDeliveryCollapsed(): void {
-		this.deliveryCollapsed = !this.deliveryCollapsed;
+	handleMouse(event: TuiMouseEvent): { handled: true } | undefined {
+		if (this.layout !== "sidebar" || event.type !== "click" || event.button !== "left" || event.x !== 3)
+			return undefined;
+		const snapshot = this.getSnapshot();
+		const safeWidth = Math.max(1, event.width);
+		let startY = 0;
+		const cards = sidebarCards(snapshot);
+		for (const [index, card] of cards.entries()) {
+			if (event.y === startY) {
+				if (this.collapsedCards.has(card.id)) this.collapsedCards.delete(card.id);
+				else this.collapsedCards.add(card.id);
+				return { handled: true };
+			}
+			startY += sidebarCard(card, safeWidth, this.collapsedCards.has(card.id)).length;
+			if (index < cards.length - 1) startY += 1;
+		}
+		return undefined;
 	}
 
 	render(width: number): string[] {
 		if (!this.isVisible()) return [];
 		const snapshot = this.getSnapshot();
 		return this.layout === "sidebar"
-			? sidebarLines(snapshot, width, this.deliveryCollapsed)
+			? sidebarLines(snapshot, width, this.collapsedCards)
 			: footerLines(snapshot, width);
 	}
 

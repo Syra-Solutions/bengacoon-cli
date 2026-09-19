@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, realpath, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { childArguments, childEnvironment, childInvocation, deriveFinalResult, formatTerminalCompletion, JobManager, sanitizeOutputTail, wasStoppedByGuard } from "./runner.ts";
@@ -229,6 +229,17 @@ assert.equal(await isGuardedPathInsideRoot(root, "~root/.ssh"), false);
 assert.equal(await isGuardedPathInsideRoot(root, "~someone/x"), false);
 // An ordinary in-repo path is unaffected.
 assert.equal(await isGuardedPathInsideRoot(root, "extensions/jobs/runner.ts"), true);
+
+const guardedRoot = await mkdtemp(join(tmpdir(), "bengacoon-guard-root-"));
+const guardedAlias = `${guardedRoot}-alias`;
+try {
+	await writeFile(join(guardedRoot, "inside.txt"), "allowed\n");
+	await symlink(guardedRoot, guardedAlias);
+	assert.equal(await isGuardedPathInsideRoot(guardedAlias, "inside.txt"), true);
+} finally {
+	await rm(guardedAlias, { recursive: true, force: true });
+	await rm(guardedRoot, { recursive: true, force: true });
+}
 
 // The extension refuses a profile inside the worktree too, so the invariant does not depend on
 // the launcher being the only way in.

@@ -20,6 +20,10 @@ describe("Windows keybinding defaults", () => {
 		expect(useWindowsKeybindings("darwin", {})).toBe(false);
 	});
 
+	it("does not reserve a keyboard shortcut for sidebar cards", () => {
+		expect(KEYBINDINGS).not.toHaveProperty("app.delivery.toggle");
+	});
+
 	it("applies the detected defaults consistently", () => {
 		const windowsKeybindings = useWindowsKeybindings();
 		const nativeWindows = process.platform === "win32";

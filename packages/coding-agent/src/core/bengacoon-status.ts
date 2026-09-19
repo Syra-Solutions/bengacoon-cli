@@ -33,6 +33,7 @@ export interface BengacoonStatusSnapshot {
 		readonly details: readonly string[];
 	};
 	readonly changes: {
+		readonly unavailable: boolean;
 		readonly total: number;
 		readonly added: number;
 		readonly removed: number;
@@ -70,18 +71,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function parseChanges(value: string | undefined): BengacoonStatusSnapshot["changes"] {
-	if (!value) return { total: 0, added: 0, removed: 0, details: [] };
+	if (!value) return { unavailable: false, total: 0, added: 0, removed: 0, details: [] };
 	try {
 		const parsed: unknown = JSON.parse(value);
-		if (!isRecord(parsed) || !Array.isArray(parsed.details)) return { total: 0, added: 0, removed: 0, details: [] };
+		if (!isRecord(parsed) || !Array.isArray(parsed.details))
+			return { unavailable: false, total: 0, added: 0, removed: 0, details: [] };
 		return {
+			unavailable: parsed.unavailable === true,
 			total: typeof parsed.total === "number" && parsed.total >= 0 ? parsed.total : 0,
 			added: typeof parsed.added === "number" && parsed.added >= 0 ? parsed.added : 0,
 			removed: typeof parsed.removed === "number" && parsed.removed >= 0 ? parsed.removed : 0,
 			details: parsed.details.filter((detail): detail is string => typeof detail === "string"),
 		};
 	} catch {
-		return { total: 0, added: 0, removed: 0, details: [] };
+		return { unavailable: false, total: 0, added: 0, removed: 0, details: [] };
 	}
 }
 

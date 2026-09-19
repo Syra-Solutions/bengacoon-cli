@@ -31,6 +31,14 @@ describe("Bengacoon status snapshot", () => {
 							},
 						],
 						[
+							"bengacoon-changes",
+							{
+								values: {
+									changes: JSON.stringify({ unavailable: true, total: 0, added: 0, removed: 0, details: [] }),
+								},
+							},
+						],
+						[
 							"bengacoon-quota",
 							{
 								values: {
@@ -68,7 +76,7 @@ describe("Bengacoon status snapshot", () => {
 				failed: 1,
 				details: ["a1b2c3d4 running Repository exploration", "e5f6a7b8 failed Repository verification"],
 			},
-			changes: { total: 0, added: 0, removed: 0, details: [] },
+			changes: { unavailable: true, total: 0, added: 0, removed: 0, details: [] },
 			delivery: null,
 			quota: {
 				plan: "pro",
@@ -153,6 +161,7 @@ describe("Bengacoon status snapshot", () => {
 		);
 
 		expect(snapshot.context).toEqual({ remainingTokens: null, remainingPercent: null });
+		expect(snapshot.changes).toEqual({ unavailable: false, total: 0, added: 0, removed: 0, details: [] });
 		expect(snapshot.quota).toEqual({ plan: null, limits: [] });
 	});
 });

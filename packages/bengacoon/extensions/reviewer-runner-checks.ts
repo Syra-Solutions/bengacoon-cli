@@ -100,6 +100,16 @@ try {
   await writeFile(join(reviewerWorktree, "README.md"), "fixture\n");
   execFileSync("git", ["add", "README.md"], { cwd: reviewerWorktree });
   execFileSync("git", ["-c", "user.email=fixture@example.com", "-c", "user.name=Fixture", "commit", "--quiet", "-m", "initial"], { cwd: reviewerWorktree });
+  let earlyChanges;
+  assert.doesNotThrow(() => extensionHandlers.get("tool_result")({ isError: false }, {
+    cwd: reviewerWorktree,
+    ui: {
+      setStatus(key, _text, metadata) {
+        if (key === "bengacoon-changes") earlyChanges = metadata.values.changes;
+      },
+    },
+  }));
+  assert.deepEqual(JSON.parse(earlyChanges), { total: 0, added: 0, removed: 0, details: [] });
   await extensionHandlers.get("session_start")({}, {
     cwd: reviewerWorktree,
     ui: { setStatus() {}, notify() {} },

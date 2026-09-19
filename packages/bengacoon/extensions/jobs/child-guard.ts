@@ -39,12 +39,18 @@ function expandHome(path) {
 
 export async function isGuardedPathInsideRoot(root, requestedPath) {
   if (typeof root !== "string" || !root || !isAbsolute(root)) return false;
+  let canonicalRoot;
+  try {
+    canonicalRoot = await realpath(root);
+  } catch {
+    return false;
+  }
   const requested = expandHome(toolPath({ path: requestedPath }));
   if (requested === undefined) return false;
-  const resolved = resolve(root, requested);
-  if (!isInside(root, resolved)) return false;
+  const resolved = resolve(canonicalRoot, requested);
+  if (!isInside(canonicalRoot, resolved)) return false;
   const canonicalAncestor = await existingAncestor(resolved);
-  return Boolean(canonicalAncestor && isInside(root, canonicalAncestor));
+  return Boolean(canonicalAncestor && isInside(canonicalRoot, canonicalAncestor));
 }
 
 // Announced on the child's stderr so the parent can tell a blocked job from a finished one.

@@ -1,6 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { formatTerminalCompletion, JobManager, validateTask } from "./jobs/runner.ts";
@@ -10,7 +8,7 @@ import { JobCard, JobsView } from "./jobs/ui.ts";
 import { readModelAssignments, resolveBengacoonAgentDir } from "./models/config.ts";
 import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
 import { activeDeliveryWork, headCommitDiffHash, headCommitParent, loadDeliveryState, receiptState, restoreDeliveryState, saveDeliveryState, stagedDiffHash } from "./delivery.ts";
-import { SessionChanges } from "./changes.ts";
+import { GitChanges } from "./changes.ts";
 import { runReviewer } from "./reviewer-runner.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
@@ -43,7 +41,7 @@ export default function bengacoon(pi, dependencies = {}) {
   let quotaRefreshAt = 0;
   let hasFetchedQuota = false;
   let knownJobStates;
-  let sessionChanges = new SessionChanges();
+  let gitChanges;
   let reviewerRunning = false;
 
   const deliverJobCard = (record, summary, terminal) => {
@@ -78,8 +76,13 @@ export default function bengacoon(pi, dependencies = {}) {
     });
   };
 
+  const currentGitChanges = (ctx) => {
+    if (!gitChanges || gitChanges.cwd !== ctx.cwd) gitChanges = new GitChanges(ctx.cwd);
+    return gitChanges;
+  };
+
   const setChangesStatus = (ctx) => {
-    const snapshot = sessionChanges.summary();
+    const snapshot = currentGitChanges(ctx).summary();
     ctx.ui.setStatus("bengacoon-changes", `changes: ${snapshot.total} files; +${snapshot.added} -${snapshot.removed}`, {
       lines: snapshot.details,
       values: { changes: JSON.stringify(snapshot) },
@@ -205,32 +208,8 @@ export default function bengacoon(pi, dependencies = {}) {
     });
   });
 
-  pi.on("tool_call", (event, ctx) => {
-    if ((event.toolName !== "edit" && event.toolName !== "write") || typeof event.input.path !== "string") return;
-    const path = resolve(ctx.cwd, event.input.path);
-    const displayPath = relative(ctx.cwd, path);
-    if (displayPath.startsWith("..")) return;
-    try {
-      const contents = readFileSync(path, "utf8");
-      if (Buffer.byteLength(contents) <= 64 * 1024) sessionChanges.captureBefore(displayPath, contents);
-    } catch {
-      sessionChanges.captureBefore(displayPath, "");
-    }
-  });
-
   pi.on("tool_result", (event, ctx) => {
-    if (event.isError || (event.toolName !== "edit" && event.toolName !== "write") || typeof event.input.path !== "string") return;
-    const path = resolve(ctx.cwd, event.input.path);
-    const displayPath = relative(ctx.cwd, path);
-    if (displayPath.startsWith("..")) return;
-    try {
-      const contents = readFileSync(path, "utf8");
-      if (Buffer.byteLength(contents) > 64 * 1024) return;
-      sessionChanges.captureAfter(displayPath, contents);
-      setChangesStatus(ctx);
-    } catch {
-      // A successful tool result without a readable local file has no attributable snapshot.
-    }
+    if (!event.isError) setChangesStatus(ctx);
   });
 
   pi.on("after_provider_response", (event, ctx) => {
@@ -253,7 +232,7 @@ export default function bengacoon(pi, dependencies = {}) {
     requestQuotaRefresh(ctx, session);
     deliverySession = session;
     knownJobStates = undefined;
-    sessionChanges = new SessionChanges();
+    currentGitChanges(ctx);
     setChangesStatus(ctx);
     manager = undefined;
     showJobDetail = async (id) => {
@@ -450,12 +429,13 @@ export default function bengacoon(pi, dependencies = {}) {
   });
 
   pi.registerCommand("bengacoon-changes", {
-    description: "Show changes attributed to successful write and edit tools in this session",
+    description: "Show current Git changes",
     handler: async (args, ctx) => {
       const path = args.trim();
-      const text = path ? sessionChanges.detail(path) : sessionChanges.summary().details.join("\n");
+      const changes = currentGitChanges(ctx);
+      const text = path ? changes.detail(path) : changes.summary().details.join("\n");
       if (!text) {
-        ctx.ui.notify("No changes are attributed to this session.", "info");
+        ctx.ui.notify("No Git changes are pending.", "info");
         return;
       }
       await showJobs(ctx, text);

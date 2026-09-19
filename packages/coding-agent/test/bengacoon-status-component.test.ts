@@ -1,14 +1,31 @@
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { BengacoonStatusSnapshot } from "../src/core/bengacoon-status.ts";
 import { BengacoonStatusComponent } from "../src/modes/interactive/components/bengacoon-status.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+
+function leftClick(y: number): TuiMouseEvent {
+	return {
+		type: "click",
+		button: "left",
+		x: 3,
+		y,
+		screenX: 1,
+		screenY: y,
+		width: 36,
+		height: 100,
+		shift: false,
+		alt: false,
+		ctrl: false,
+	};
+}
 
 const snapshot: BengacoonStatusSnapshot = {
 	branch: "feat/responsive-bengacoon-sidebar",
 	usage: { inputTokens: 12_400, outputTokens: 2_100, cost: 0.42 },
 	context: { remainingTokens: 75_000, remainingPercent: 75 },
 	changes: {
+		unavailable: false,
 		total: 2,
 		added: 42,
 		removed: 7,
@@ -55,27 +72,27 @@ describe("Bengacoon status component", () => {
 		const text = lines.map(stripTerminalSequences).join("\n");
 
 		expect(lines.every((line) => visibleWidth(line) <= 36)).toBe(true);
-		expect(lines).toContain(theme.fg("accent", "╭─  Git"));
+		expect(lines).toContain(theme.fg("accent", "╭─ ▼  Git"));
 		expect(lines.some((line) => line.includes(theme.fg("muted", "Branch")))).toBe(true);
-		expect(text).toContain("╭─  Git");
+		expect(text).toContain("╭─ ▼  Git");
 		expect(text).toContain("│ Branch");
-		expect(text).toContain("╭─ ⚙ AI usage");
+		expect(text).toContain("╭─ ▼ ⚙ AI usage");
 		expect(text).toContain("│ Input");
-		expect(text).toContain("╭─ ◷ Context");
+		expect(text).toContain("╭─ ▼ ◷ Context");
 		expect(text).toContain("│ Remaining");
-		expect(text).toContain("╭─ ▣ Delivery");
+		expect(text).toContain("╭─ ▼ ▣ Delivery");
 		expect(text).toContain("│ Work     Delivery observability");
 		expect(text).toContain("│ Verify   prove-red proven");
 		expect(text).toContain("│ Receipt  matches");
-		expect(text).toContain("╭─ ✎ Changes");
+		expect(text).toContain("╭─ ▼ ✎ Changes");
 		expect(text).toContain("│ Summary  2 files · +42 -7");
 		expect(text).toContain("│ File     api.ts +31 -4");
-		expect(text).toContain("╭─ ↻ Jobs");
+		expect(text).toContain("╭─ ▼ ↻ Jobs");
 		expect(text).toContain("│ Summary  4 total · 1 active · 1");
 		expect(text).toContain("│          failed");
 		expect(text).toContain("│ Detail   a1b2c3d4 running");
 		expect(text).toContain("│ Detail   e5f6a7b8 failed");
-		expect(text).toContain("╭─ ◐ Quota");
+		expect(text).toContain("╭─ ▼ ◐ Quota");
 		expect(text).toContain("│ Plan     pro");
 		expect(text).toContain("│ codex 5h ████░░░░░░ 40%");
 		expect(text).toContain("│ Remaining 60% remaining");
@@ -85,18 +102,35 @@ describe("Bengacoon status component", () => {
 		expect(text).toContain("│ Status   Limit reached");
 	});
 
-	it("collapses delivery to its active work", () => {
+	it("collapses every sidebar card from its arrow", () => {
 		initTheme("cyber-coon");
 		const component = new BengacoonStatusComponent(() => snapshot, "sidebar");
-		component.toggleDeliveryCollapsed();
+		const deliveryHeader = component.render(36).map(stripTerminalSequences).indexOf("╭─ ▼ ▣ Delivery");
+
+		expect(deliveryHeader).toBeGreaterThanOrEqual(0);
+		expect(component.handleMouse?.(leftClick(deliveryHeader))).toEqual({ handled: true });
+		let text = component.render(36).map(stripTerminalSequences).join("\n");
+		expect(text).toContain("╭─ ▶ ▣ Delivery");
+		expect(text).not.toContain("│ Verify");
+
+		const changesHeader = component.render(36).map(stripTerminalSequences).indexOf("╭─ ▼ ✎ Changes");
+		expect(changesHeader).toBeGreaterThanOrEqual(0);
+		expect(component.handleMouse?.(leftClick(changesHeader))).toEqual({ handled: true });
+		text = component.render(36).map(stripTerminalSequences).join("\n");
+		expect(text).toContain("╭─ ▶ ✎ Changes");
+		expect(text).not.toContain("│ Summary  2 files · +42 -7");
+	});
+
+	it("renders unavailable Git changes without stale details", () => {
+		initTheme("cyber-coon");
+		const component = new BengacoonStatusComponent(
+			() => ({ ...snapshot, changes: { unavailable: true, total: 0, added: 0, removed: 0, details: ["stale"] } }),
+			"sidebar",
+		);
 		const text = component.render(36).map(stripTerminalSequences).join("\n");
 
-		expect(text).toContain("╭─ ▣ Delivery");
-		expect(text).toContain("│ Work     Delivery observability");
-		expect(text).not.toContain("Acceptance");
-		expect(text).not.toContain("Verify");
-		expect(text).not.toContain("Receipt");
-		expect(text).not.toContain("Next");
+		expect(text).toContain("│ Summary  Unavailable");
+		expect(text).not.toContain("stale");
 	});
 
 	it("fills the context bar from used context", () => {
