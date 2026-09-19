@@ -10,6 +10,7 @@ import { fetchCodexQuota, parseCodexQuotaHeaders } from "./quota.ts";
 import { activeDeliveryWork, headCommitDiffHash, headCommitParent, loadDeliveryState, receiptState, restoreDeliveryState, saveDeliveryState, stagedDiffHash } from "./delivery.ts";
 import { GitChanges } from "./changes.ts";
 import { runReviewer } from "./reviewer-runner.ts";
+import { registerDecisionTool } from "./decision-tool.ts";
 
 const LOAD_SIGNAL = "BENGACOON_EXTENSION_LOADED";
 const STATUS_SIGNAL = "BENGACOON_STATUS: extension=loaded";
@@ -281,6 +282,8 @@ export default function bengacoon(pi, dependencies = {}) {
     manager = undefined;
     if (closingManager) await closingManager.shutdown();
   });
+
+  registerDecisionTool(pi);
 
   pi.registerTool({
     name: "bengacoon_run_reviewer",

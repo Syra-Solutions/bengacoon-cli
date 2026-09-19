@@ -10,6 +10,7 @@
 - Explain non-trivial designs and problems as: problem, concrete example or short trace, then solution. State why the solution is necessary and distinguish it from optional complexity.
 - Prefer concrete behavior and small illustrations over abstract summaries, dense terminology, or unexplained lists of changes.
 - When the user asks a question, answer it first before making edits or running implementation commands.
+- When asking the user to decide, provide concise choices and always include a free-form input option. Prefer three suggested choices plus `Other:` when there are real alternatives; use `Yes`, `No`, and `Other:` for binary decisions. Mark the recommended choice when one exists.
 - When responding to user feedback or an analysis, explicitly say whether you agree or disagree before saying what you changed.
 
 ## Code Quality
